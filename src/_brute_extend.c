@@ -13,9 +13,13 @@
  *
  * Usage:
  *   brute_extend3 <target_enc> <oracle_enc> <oracle_orig_name> <magic_hex> \
- *                 <max_bytes> [ks_extend_hex]
+ *                 <max_bytes> <before_count> <after_count> <skipped_hex> \
+ *                 [ks_extend_hex]
  *
  * Where:
+ *   <before_count>  LockBit intermittent encryption: before_chunk_count
+ *   <after_count>   LockBit intermittent encryption: after_chunk_count
+ *   <skipped_hex>   LockBit intermittent encryption: skipped_bytes (e.g. 0x520000)
  *   <ks_extend_hex> is an OPTIONAL contiguous-keystream-extension byte
  *   string (e.g. "5623 8a") that extends the natural 106-byte oracle
  *   baseline to (106 + len(ks_extend)) bytes before brute-forcing.
@@ -126,8 +130,9 @@ static int parse_hex_bytes(const char *s, uint8_t *out, int max_bytes) {
 }
 
 int main(int argc, char *argv[]) {
-    if (argc < 6) {
-        fprintf(stderr, "Usage: %s <target> <oracle> <oracle_name> <magic_hex> <max_bytes> [ks_extend_hex]\n",
+    if (argc < 9) {
+        fprintf(stderr, "Usage: %s <target> <oracle> <oracle_name> <magic_hex> <max_bytes> "
+                        "<before_count> <after_count> <skipped_hex> [ks_extend_hex]\n",
                 argv[0]);
         return 1;
     }
@@ -136,7 +141,10 @@ int main(int argc, char *argv[]) {
     const char *oracle_name = argv[3];
     const char *magic_hex = argv[4];
     int max_bytes = atoi(argv[5]);
-    const char *ks_extend_hex = (argc > 6) ? argv[6] : NULL;
+    uint32_t before_count = (uint32_t)strtoul(argv[6], NULL, 0);
+    uint32_t after_count  = (uint32_t)strtoul(argv[7], NULL, 0);
+    uint64_t skipped_bytes = (uint64_t)strtoull(argv[8], NULL, 0);
+    const char *ks_extend_hex = (argc > 9) ? argv[9] : NULL;
 
     int magic_len = strlen(magic_hex) / 2;
     if (magic_len > 16) { fprintf(stderr, "Magic too long (max 16 bytes)\n"); return 1; }
@@ -161,8 +169,25 @@ int main(int argc, char *argv[]) {
     uint8_t *kp = malloc(known_len);
     memcpy(kp, compressed, sz);
     kp[sz+0] = sz & 0xFF; kp[sz+1] = (sz>>8)&0xFF;
-    memcpy(kp+sz+2,  "\x00\x00\x52\x00\x00\x00\x00\x00", 8);  // skipped=0x520000
-    memcpy(kp+sz+10, "\x03\x00\x00\x00\x03\x00\x00\x00", 8); // before=3, after=3
+    /* skipped_bytes: 8-byte little-endian */
+    kp[sz+2]  = (skipped_bytes >>  0) & 0xFF;
+    kp[sz+3]  = (skipped_bytes >>  8) & 0xFF;
+    kp[sz+4]  = (skipped_bytes >> 16) & 0xFF;
+    kp[sz+5]  = (skipped_bytes >> 24) & 0xFF;
+    kp[sz+6]  = (skipped_bytes >> 32) & 0xFF;
+    kp[sz+7]  = (skipped_bytes >> 40) & 0xFF;
+    kp[sz+8]  = (skipped_bytes >> 48) & 0xFF;
+    kp[sz+9]  = (skipped_bytes >> 56) & 0xFF;
+    /* before_chunk_count: 4-byte little-endian */
+    kp[sz+10] = (before_count >>  0) & 0xFF;
+    kp[sz+11] = (before_count >>  8) & 0xFF;
+    kp[sz+12] = (before_count >> 16) & 0xFF;
+    kp[sz+13] = (before_count >> 24) & 0xFF;
+    /* after_chunk_count: 4-byte little-endian */
+    kp[sz+14] = (after_count >>  0) & 0xFF;
+    kp[sz+15] = (after_count >>  8) & 0xFF;
+    kp[sz+16] = (after_count >> 16) & 0xFF;
+    kp[sz+17] = (after_count >> 24) & 0xFF;
     if (known_len > ofl) { fprintf(stderr, "oracle too short\n"); return 1; }
 
     // Keystream buffer with extra room for extension

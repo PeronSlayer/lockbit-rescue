@@ -147,7 +147,7 @@ Brute force is essentially instant. Recovered keystream bytes:
 - `[107] = 0x23`
 - `[108] = 0x8a`
 
-These are now hardcoded into `brute_extend2.c` so the next step starts from `known_len = 109`.
+These are passed to the next `brute-extend` invocation via `[ks_extend_hex]` so the next step starts from `known_len = 109`.
 
 ### Step 2: extend [109..112] via 4-byte brute force
 
@@ -158,8 +158,11 @@ Target: `DOCUMENT_1.pdf` (fei_len=113, missing 4 from base 109).
     "DOCUMENT_1.pdf.MoHsVxKYI" \
     "SAMPLE_ORACLE_DOCUMENT_LONG_FILENAME_20170519.pdf.MoHsVxKYI" \
     "SAMPLE_ORACLE_DOCUMENT_LONG_FILENAME_20170519.pdf" \
-    255044462d312e370a 4
+    255044462d312e370a 4 \
+    3 3 0x520000
 ```
+
+The last three arguments (`3 3 0x520000`) are the LockBit intermittent-encryption parameters for this batch: `before_chunk_count`, `after_chunk_count`, and `skipped_bytes`. These vary per encryption batch — recover them from any file's decrypted FEI (see §6 below) or pass the values from `lockbit-extend.py --before-chunk / --after-chunk / --skipped-hex`.
 
 Result (after ~7.5 min wall time):
 - `[109] = 0xea`, `[110] = 0xaa`, `[111] = 0xca`, `[112] = 0xdc`

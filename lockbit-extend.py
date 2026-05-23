@@ -271,7 +271,9 @@ def process_batch(kek, files, output_root, scratch_root, brute_bin, direct_bin,
             try:
                 p = subprocess.run(
                     [str(brute_bin), str(local_target), str(local_oracle), oracle_orig,
-                     mhex, str(max_brute_bytes), ks_extend_hex],
+                     mhex, str(max_brute_bytes),
+                     str(before_chunk), str(after_chunk), skipped_hex,
+                     ks_extend_hex],
                     capture_output=True, timeout=brute_timeout, text=True,
                 )
             except subprocess.TimeoutExpired:
