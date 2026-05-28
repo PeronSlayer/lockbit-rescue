@@ -110,6 +110,24 @@ All notable changes in this fork are documented here, grouped by sprint mileston
 - `README.md`
   - Documented Sprint 4 UX/coverage/reporting features.
 
+## 2026-05-28 - Sprint 5 (Quality, CI, Release Readiness)
+
+### Added
+- Test suite for core utilities and CLI smoke paths:
+  - `tests/test_output_layout.py`
+  - `tests/test_manifest.py`
+  - `tests/test_report_utils.py`
+  - `tests/test_cli_smoke.py`
+- GitHub Actions CI workflow:
+  - `.github/workflows/ci.yml`
+  - Runs dependency install, Python compile checks, and pytest on push/PR.
+
+### Changed
+- `.gitignore`
+  - Added `.pytest_cache/`.
+- `README.md`
+  - Added local quality-check commands and CI workflow reference.
+
 ---
 
 Notes:

@@ -83,6 +83,17 @@ sudo pacman -S base-devel git python python-pip file
 bash install.sh
 ```
 
+## Quality checks
+
+Run local checks before pushing changes:
+
+```bash
+python3 -m py_compile lockbit-rescue.py lockbit-extend.py verify-recovered.py manifest.py keystream_cache.py phase2.py output_layout.py report_utils.py
+pytest -q
+```
+
+CI is configured with GitHub Actions in `.github/workflows/ci.yml` and runs compile checks plus the test suite on push/PR.
+
 ---
 
 ## Usage
