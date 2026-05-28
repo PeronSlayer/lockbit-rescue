@@ -601,24 +601,7 @@ def main():
             return manifest.export_json(Path(args.manifest_json))
         return None
 
-    # Locate stream-reuse
     here = Path(__file__).resolve().parent
-    candidates = []
-    if args.stream_reuse:
-        candidates.append(Path(args.stream_reuse))
-    candidates += [
-        here / "stream-reuse",
-        here.parent / "lockbit-v3-linux-decryptor" / "stream-reuse",
-        Path("/usr/local/bin/stream-reuse"),
-    ]
-    tool = next((c for c in candidates if c.is_file() and os.access(c, os.X_OK)), None)
-    if not tool:
-        print("ERROR: stream-reuse binary not found. Try --stream-reuse PATH or run install.sh.")
-        print("Looked in:")
-        for c in candidates:
-            print(f"  - {c}")
-        sys.exit(3)
-    print(f"[i] Using stream-reuse: {tool}")
 
     # Detect extension if not provided
     if not args.ext:
@@ -746,6 +729,24 @@ def main():
         flush_report()
         flush_manifest_json()
         return
+
+    # Locate stream-reuse only when decryption is actually needed.
+    candidates = []
+    if args.stream_reuse:
+        candidates.append(Path(args.stream_reuse))
+    candidates += [
+        here / "stream-reuse",
+        here.parent / "lockbit-v3-linux-decryptor" / "stream-reuse",
+        Path("/usr/local/bin/stream-reuse"),
+    ]
+    tool = next((c for c in candidates if c.is_file() and os.access(c, os.X_OK)), None)
+    if not tool:
+        print("ERROR: stream-reuse binary not found. Try --stream-reuse PATH or run install.sh.")
+        print("Looked in:")
+        for c in candidates:
+            print(f"  - {c}")
+        sys.exit(3)
+    print(f"[i] Using stream-reuse: {tool}")
 
     # --- Resume bookkeeping ---
     already = 0
