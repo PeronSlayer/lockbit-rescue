@@ -119,12 +119,13 @@ Suggested lightweight release flow:
 The repository includes a release pipeline that runs on every push to `main`:
 
 - Workflow: `.github/workflows/release-on-push.yml`
-- Behavior: build Linux bundle + build Windows wizard executable + publish GitHub prerelease
+- Behavior: build Linux bundle + build Windows wizard executable + publish a full GitHub release
 - Release assets: Linux `.tar.gz`, Windows `.zip`, and standalone `lockbit-wizard.exe`
-- Tag format: `auto-<run_number>-<short_sha>`
+- Tag format: `release-<YYYY.MM.DD>-<run_number>`
+- Release title format: `LockBit Rescue <YYYY.MM.DD> build <run_number>`
 - Guardrails: release job fails if one of `.tar.gz`/`.zip`/`.exe` is missing
-- Re-run behavior: if a prerelease with the same auto tag already exists, it is replaced
-- Retention: keeps only the latest 10 `auto-*` prereleases (older ones are removed automatically)
+- Re-run behavior: if a release with the same generated tag already exists, it is replaced
+- Cleanup: removes legacy `auto-*` releases and keeps only the latest 10 generated `release-*` releases
 
 Manual local bundle build:
 

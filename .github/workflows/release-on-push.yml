@@ -2,7 +2,7 @@ name: Release On Push
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  KEEP_AUTO_PRERELEASES: 10
+  KEEP_AUTOMATED_RELEASES: 10
 
 on:
   push:
@@ -16,13 +16,20 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      title: ${{ steps.version.outputs.title }}
 
     steps:
       - name: Compute release version
         id: version
         run: |
-          VERSION="auto-${{ github.run_number }}-${GITHUB_SHA::7}"
+          RELEASE_DATE="$(date -u +%Y.%m.%d)"
+          VERSION="${RELEASE_DATE}-${{ github.run_number }}"
+          TAG="release-${VERSION}"
+          TITLE="LockBit Rescue ${RELEASE_DATE} build ${{ github.run_number }}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "title=${TITLE}" >> "$GITHUB_OUTPUT"
 
   build-linux:
     runs-on: ubuntu-latest
@@ -153,13 +160,13 @@ jobs:
             exit 1
           fi
 
-      - name: Remove existing auto release for tag
+      - name: Remove existing automated release for tag
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          TAG="${{ needs.prepare-version.outputs.version }}"
+          TAG="${{ needs.prepare-version.outputs.tag }}"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release delete "$TAG" --yes --cleanup-tag
           fi
@@ -167,37 +174,71 @@ jobs:
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.prepare-version.outputs.version }}
-          name: Automated Release ${{ needs.prepare-version.outputs.version }}
+          tag_name: ${{ needs.prepare-version.outputs.tag }}
+          name: ${{ needs.prepare-version.outputs.title }}
           body: |
-            Automated build+release from commit `${{ github.sha }}`.
+            Full automated release from commit `${{ github.sha }}`.
 
             - Workflow: `${{ github.workflow }}`
             - Run number: `${{ github.run_number }}`
             - Trigger: push to `main`
           prerelease: false
+          make_latest: true
           fail_on_unmatched_files: true
           files: |
             release-assets/**/*.tar.gz
             release-assets/**/*.zip
             release-assets/**/*.exe
 
-      - name: Cleanup old auto prereleases
+      - name: Force full release status
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          KEEP="${KEEP_AUTO_PRERELEASES}"
+          RELEASE_ID="$(gh release view "${{ needs.prepare-version.outputs.tag }}" --json databaseId --jq '.databaseId')"
+          gh api \
+            --method PATCH \
+            "repos/${{ github.repository }}/releases/${RELEASE_ID}" \
+            -f name="${{ needs.prepare-version.outputs.title }}" \
+            -F prerelease=false \
+            -F draft=false \
+            -F make_latest=true
+
+      - name: Cleanup legacy auto releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t LEGACY_TAGS < <(
+            gh release list \
+              --limit 100 \
+              --json tagName \
+              --jq '.[] | select(.tagName | startswith("auto-")) | .tagName'
+          )
+
+          for tag in "${LEGACY_TAGS[@]}"; do
+            echo "Deleting legacy auto release: ${tag}"
+            gh release delete "${tag}" --yes --cleanup-tag
+          done
+
+      - name: Cleanup old automated releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          KEEP="${KEEP_AUTOMATED_RELEASES}"
           mapfile -t TAGS < <(
             gh release list \
               --limit 100 \
-              --json tagName,isPrerelease,createdAt \
-              --jq '.[] | select(.isPrerelease == true and (.tagName | startswith("auto-"))) | .tagName'
+              --json tagName,createdAt \
+              --jq '.[] | select(.tagName | startswith("release-")) | .tagName'
           )
 
           TOTAL="${#TAGS[@]}"
-          echo "Auto prereleases found: ${TOTAL} (keep newest ${KEEP})"
+          echo "Automated releases found: ${TOTAL} (keep newest ${KEEP})"
           if (( TOTAL <= KEEP )); then
             exit 0
           fi
@@ -205,7 +246,7 @@ jobs:
           for i in "${!TAGS[@]}"; do
             if (( i >= KEEP )); then
               tag="${TAGS[$i]}"
-              echo "Deleting old auto prerelease: ${tag}"
+              echo "Deleting old automated release: ${tag}"
               gh release delete "${tag}" --yes --cleanup-tag
             fi
           done
