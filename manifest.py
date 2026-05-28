@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 
+from recovery_metrics import METRIC_HEADERS, aggregate_manifest_rows, metric_fields
+
 
 class Manifest:
     HEADERS = [
@@ -24,10 +26,11 @@ class Manifest:
         "file_size_bytes",
         "fei_len",
         "timestamp",
-    ]
+    ] + METRIC_HEADERS
 
-    def __init__(self, output_dir: Path):
+    def __init__(self, output_dir: Path, default_phase: str = ""):
         self.path = Path(output_dir) / "manifest.csv"
+        self.default_phase = default_phase
         self._seen = set()
         self._rows = []
         self._lock = Lock()
@@ -69,6 +72,14 @@ class Manifest:
         file_size_bytes: int,
         fei_len: int,
         status_reason: str = "",
+        recovered_bytes: int | str | None = None,
+        recovery_rate_percent: float | str | None = None,
+        phase_attempted: str = "",
+        confidence_score: int | str | None = None,
+        magic_rule_id: str = "",
+        keystream_offset_start: int | str | None = "",
+        keystream_offset_end: int | str | None = "",
+        is_truncated: bool | str | None = None,
     ) -> bool:
         src = str(encrypted_source_path)
         if not src:
@@ -86,6 +97,19 @@ class Manifest:
             "fei_len": int(fei_len),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
+        row.update(metric_fields(
+            status=status,
+            file_size_bytes=file_size_bytes,
+            recovered_output_path=str(recovered_output_path or ""),
+            recovered_bytes=recovered_bytes,
+            recovery_rate_percent=recovery_rate_percent,
+            phase_attempted=phase_attempted or self.default_phase,
+            confidence_score=confidence_score,
+            magic_rule_id=magic_rule_id,
+            keystream_offset_start=keystream_offset_start,
+            keystream_offset_end=keystream_offset_end,
+            is_truncated=is_truncated,
+        ))
         return self._append_row(row)
 
     def _append_row(self, row: dict) -> bool:
@@ -139,6 +163,7 @@ class Manifest:
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "csv_path": str(self.path),
             "totals": totals,
+            "metrics": aggregate_manifest_rows(rows),
             "rows": rows,
         }
         target.parent.mkdir(parents=True, exist_ok=True)

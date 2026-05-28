@@ -10,6 +10,7 @@ from pathlib import Path
 from manifest import Manifest
 from phase2 import detect_extension, run_phase2_batches, scan_batches
 from report_utils import utc_now_iso, write_html_report, write_json_report
+from recovery_metrics import aggregate_manifest_rows
 from runtime_profiles import VALID_PROFILES, resolve_phase2_profile
 
 
@@ -76,7 +77,7 @@ def main():
         sys.exit(2)
 
     output.mkdir(parents=True, exist_ok=True)
-    manifest = Manifest(output)
+    manifest = Manifest(output, default_phase="phase2")
     run_started = time.time()
     report = {
         "tool": "lockbit-extend",
@@ -93,6 +94,7 @@ def main():
     def flush_report():
         report["duration_sec"] = round(time.time() - run_started, 3)
         report["generated_at"] = utc_now_iso()
+        report["metrics"] = aggregate_manifest_rows(manifest.rows())
         if args.report_json:
             write_json_report(Path(args.report_json), report)
         if args.report_html:

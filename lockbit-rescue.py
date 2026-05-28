@@ -54,6 +54,7 @@ from manifest import Manifest
 from output_layout import collision_safe_path, compute_output_relative, maybe_predict_name
 from phase2 import run_phase2_batches
 from report_utils import utc_now_iso, write_html_report, write_json_report
+from recovery_metrics import aggregate_manifest_rows
 from runtime_profiles import VALID_PROFILES, resolve_recovery_profile
 
 try:
@@ -343,7 +344,7 @@ def _phase1_group_worker(payload: dict):
     output = Path(payload["output"])
     scratch_root = Path(payload["scratch"]) / ".parallel_phase1"
     scratch_root.mkdir(parents=True, exist_ok=True)
-    manifest = Manifest(output)
+    manifest = Manifest(output, default_phase="phase1")
 
     kek = payload["kek"]
     args_ext = payload["args_ext"]
@@ -573,7 +574,7 @@ def main():
         print(f"ERROR: source not a directory: {source}")
         sys.exit(2)
     output.mkdir(parents=True, exist_ok=True)
-    manifest = Manifest(output)
+    manifest = Manifest(output, default_phase="phase1")
     run_started = time.time()
     report = {
         "tool": "lockbit-rescue",
@@ -591,6 +592,7 @@ def main():
     def flush_report():
         report["duration_sec"] = round(time.time() - run_started, 3)
         report["generated_at"] = utc_now_iso()
+        report["metrics"] = aggregate_manifest_rows(manifest.rows())
         if args.report_json:
             write_json_report(Path(args.report_json), report)
         if args.report_html:

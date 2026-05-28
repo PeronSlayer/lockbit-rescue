@@ -84,13 +84,31 @@ The "stream offset" tricks the shellcode into producing the *same* keystream sli
 
 `lockbit-rescue` uses simple file-existence checks (`OUTPUT/group_<kek>/<basename>`) to decide whether to skip an already-recovered file. There is no on-disk database; resume is "the filesystem". This is robust to crashes — interrupting in the middle of a file leaves nothing recoverable in OUTPUT for that file (write happens via `copy_with_progress` *after* decryption succeeds), so the next run will retry it cleanly.
 
-## 8. Cases the exploit cannot help
+## 8. Recovery metrics baseline
+
+The manifest and JSON/HTML reports include a baseline metrics block so future recovery improvements can be measured instead of judged by raw OK/FAIL counts alone.
+
+Per-file manifest metrics:
+
+- `recovered_bytes`: bytes written to the recovered output path, when available.
+- `recovery_rate_percent`: `recovered_bytes / file_size_bytes * 100`, capped at 100.
+- `phase_attempted`: `phase1`, `phase2`, or blank/unknown for legacy rows.
+- `confidence_score`: conservative heuristic baseline (`OK=95`, `REVIEW=50`, `FAIL=0`).
+- `magic_rule_id`: reserved for Phase 2 magic-rule provenance.
+- `keystream_offset_start` / `keystream_offset_end`: reserved for future keystream coverage diagnostics.
+- `is_truncated`: whether the recovered output is smaller than the encrypted input size.
+
+Run-level reports aggregate those rows into `metrics`: total files, OK/REVIEW/FAIL counts, total bytes, recovered bytes, recovery rate, fully recovered percentage, average confidence, and a breakdown by phase.
+
+These metrics are operational signals, not cryptographic proof of integrity. A high recovery rate means the tool produced a large output relative to the encrypted input; it does not guarantee that a complex file format is internally valid. Deeper validators can refine `confidence_score` in later phases.
+
+## 9. Cases the exploit cannot help
 
 - Batch where every file has a small `fei_len` (i.e. all files had short filenames). `coverage` is too short to cover any target's FEI block.
 - Files whose encrypted body extends past the keystream offset we can re-derive. Typically only files larger than ~4 GiB hit this.
 - LockBit variants that don't reuse the keystream across files in a batch. So far the published research is specific to **LockBit 3.0 "Black"** ("LockBit3" with `.<random9chars>` extensions and Cyberfear ransom note style).
 
-## 9. Pointers to the upstream code
+## 10. Pointers to the upstream code
 
 - `stream-reuse.c` (in [yohanes/lockbit-v3-linux-decryptor](https://github.com/yohanes/lockbit-v3-linux-decryptor)) — the C harness that drives the LockBit shellcode for both keystream extraction and target decryption.
 - `frank.c` / `frank.h` — the (extracted) modified-Salsa20 shellcode shim from the original ransomware binary.

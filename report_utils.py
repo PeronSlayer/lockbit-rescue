@@ -28,6 +28,7 @@ def write_html_report(path: Path, payload: dict):
         plan = payload.get("plan", {}) or {}
         phase1 = payload.get("phase1", {}) or {}
         phase2 = payload.get("phase2", {}) or {}
+        metrics = payload.get("metrics", {}) or {}
         groups = plan.get("groups", []) or []
 
         def esc(value) -> str:
@@ -45,6 +46,15 @@ def write_html_report(path: Path, payload: dict):
                         f"<td>{esc(group.get('coverage_bytes'))}</td>"
                         f"<td>{esc(group.get('status'))}</td>"
                         "</tr>"
+                )
+
+        metric_cards = ""
+        if metrics:
+                metric_cards = (
+                        f"<div class=\"metric\"><span>Recovery rate</span><strong>{esc(metrics.get('recovery_rate_percent', 0))}%</strong></div>"
+                        f"<div class=\"metric\"><span>Bytes recovered</span><strong>{esc(metrics.get('bytes_recovered', 0))}</strong></div>"
+                        f"<div class=\"metric\"><span>Fully recovered</span><strong>{esc(metrics.get('files_fully_recovered_percent', 0))}%</strong></div>"
+                        f"<div class=\"metric\"><span>Avg confidence</span><strong>{esc(metrics.get('avg_confidence_score', 0))}</strong></div>"
                 )
 
         content = f"""<!doctype html>
@@ -74,6 +84,7 @@ def write_html_report(path: Path, payload: dict):
         <div class=\"metric\"><span>Phase 1 targets</span><strong>{esc(plan.get('targets_to_attempt', 0))}</strong></div>
         <div class=\"metric\"><span>Recovered</span><strong>{esc(phase1.get('ok', 0) + (phase2.get('totals', {}) or {}).get('ok', 0))}</strong></div>
         <div class=\"metric\"><span>Review</span><strong>{esc(phase1.get('review', 0) + (phase2.get('totals', {}) or {}).get('review', 0))}</strong></div>
+        {metric_cards}
     </div>
     <h2>Plan By Group</h2>
     <table>

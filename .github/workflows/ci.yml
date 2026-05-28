@@ -64,7 +64,7 @@ jobs:
 
       - name: Compile check
         run: |
-          python -m py_compile lockbit-rescue.py lockbit-extend.py lockbit-wizard.py verify-recovered.py manifest.py keystream_cache.py phase2.py output_layout.py report_utils.py runtime_profiles.py lockbit_rescue_bench.py scripts/benchmark_scan.py
+          python -m py_compile lockbit-rescue.py lockbit-extend.py lockbit-wizard.py verify-recovered.py manifest.py keystream_cache.py phase2.py output_layout.py report_utils.py recovery_metrics.py runtime_profiles.py lockbit_rescue_bench.py scripts/benchmark_scan.py scripts/benchmark_recovery.py
 
       - name: Run tests
         run: |

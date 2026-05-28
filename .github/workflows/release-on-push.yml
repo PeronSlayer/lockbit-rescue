@@ -106,6 +106,7 @@ jobs:
           Copy-Item "phase2.py" "$pkgDir/phase2.py"
           Copy-Item "output_layout.py" "$pkgDir/output_layout.py"
           Copy-Item "report_utils.py" "$pkgDir/report_utils.py"
+          Copy-Item "recovery_metrics.py" "$pkgDir/recovery_metrics.py"
           Copy-Item "runtime_profiles.py" "$pkgDir/runtime_profiles.py"
           Copy-Item "README.md" "$pkgDir/README.md"
           Copy-Item "README-WINDOWS.txt" "$pkgDir/README-WINDOWS.txt"

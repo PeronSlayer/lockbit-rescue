@@ -35,6 +35,12 @@ def test_write_html_report_creates_summary(tmp_path):
         },
         "phase1": {"ok": 1, "review": 0},
         "phase2": {"totals": {"ok": 0, "review": 1}},
+        "metrics": {
+            "recovery_rate_percent": 75.0,
+            "bytes_recovered": 750,
+            "files_fully_recovered_percent": 50.0,
+            "avg_confidence_score": 72.5,
+        },
     }
 
     write_html_report(out, payload)
@@ -42,3 +48,5 @@ def test_write_html_report_creates_summary(tmp_path):
     html = out.read_text(encoding="utf-8")
     assert "LockBit Rescue Report" in html
     assert "abc123" in html
+    assert "Recovery rate" in html
+    assert "75.0%" in html

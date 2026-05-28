@@ -261,6 +261,9 @@ def process_batch(
     predict_names: bool = False,
     aggressive: bool = False,
 ):
+    if manifest and hasattr(manifest, "default_phase"):
+        manifest.default_phase = "phase2"
+
     files = list(files)
     files.sort(key=lambda x: x[0])
     oracle_fei, oracle_fname, oracle_path, _oracle_sz = files[-1]
@@ -643,7 +646,7 @@ def _process_batch_worker(payload: dict):
 
     output = Path(payload["output"])
     scratch = Path(payload["scratch"])
-    manifest = Manifest(output)
+    manifest = Manifest(output, default_phase="phase2")
     return process_batch(
         payload["kek"],
         payload["files"],

@@ -47,6 +47,8 @@ def test_cli_plan_only_report_generation(tmp_path):
     rescue_json = json.loads(report_rescue.read_text(encoding="utf-8"))
     assert rescue_json["tool"] == "lockbit-rescue"
     assert rescue_json["phase1"]["status"] == "plan_only"
+    assert rescue_json["metrics"]["files_total"] == 0
+    assert rescue_json["metrics"]["recovery_rate_percent"] == 0.0
 
     p2 = subprocess.run(
         [
@@ -78,3 +80,5 @@ def test_cli_plan_only_report_generation(tmp_path):
     extend_json = json.loads(report_extend.read_text(encoding="utf-8"))
     assert extend_json["tool"] == "lockbit-extend"
     assert extend_json["phase2"]["status"] == "plan_only"
+    assert extend_json["metrics"]["files_total"] == 0
+    assert extend_json["metrics"]["recovery_rate_percent"] == 0.0
