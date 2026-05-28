@@ -120,6 +120,7 @@ The repository includes a release pipeline that runs on every push to `main`:
 
 - Workflow: `.github/workflows/release-on-push.yml`
 - Behavior: build Linux bundle + build Windows wizard executable + publish GitHub prerelease
+- Release assets: Linux `.tar.gz`, Windows `.zip`, and standalone `lockbit-wizard.exe`
 - Tag format: `auto-<run_number>-<full_sha>`
 
 Manual local bundle build:
