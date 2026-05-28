@@ -190,6 +190,38 @@ All notable changes in this fork are documented here, grouped by sprint mileston
 - `README.md`
   - Documents release checksums, verification command, and Windows release guide.
 
+## 2026-05-28 - Sprints 8-9 (UX Recovery and Recovery Quality)
+
+### Added
+- HTML run reports:
+  - `lockbit-rescue.py --report-html PATH`
+  - `report_utils.write_html_report(...)`
+- Manifest JSON export:
+  - `lockbit-rescue.py --manifest-json PATH`
+  - `Manifest.export_json(...)`
+- Collision-safe output path helper:
+  - `output_layout.collision_safe_path(...)`
+
+### Changed
+- `lockbit-rescue.py`
+  - Adds per-group plan details to JSON/HTML reports.
+  - Prints Phase 2 candidate and blocked-group counts during planning.
+  - Exports manifest JSON on request.
+  - Uses manifest-aware resume checks before skipping existing outputs.
+  - Resolves basename collisions with deterministic source-hash suffixes.
+- `phase2.py`
+  - Uses the same collision-safe output behavior and manifest-aware resume checks.
+- `lockbit-wizard.py`
+  - Validates source/output folders before running.
+  - Shows output free space and WSL backend availability.
+  - Supports optional HTML report and manifest JSON paths.
+  - Shows a final settings summary before execution.
+- `README.md`
+  - Documents report HTML, manifest JSON, collision handling, and wizard validation behavior.
+
+### Tests
+- Added coverage for collision-safe paths, manifest JSON export, and HTML report generation.
+
 ---
 
 Notes:

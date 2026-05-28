@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
 
 
 _MAGIC_TO_EXT = {
@@ -87,3 +88,23 @@ def maybe_predict_name(path: Path, file_type_magic: str, enabled: bool) -> Path:
                 return alt
             idx += 1
     return candidate
+
+
+def collision_safe_path(path: Path, encrypted_source_path: str) -> Path:
+    """Return a deterministic non-conflicting path for basename collisions."""
+    if not path.exists():
+        return path
+
+    digest = hashlib.sha1(str(encrypted_source_path).encode("utf-8", errors="ignore")).hexdigest()[:8]
+    stem = path.stem or path.name
+    suffix = path.suffix
+    candidate = path.with_name(f"{stem}__{digest}{suffix}")
+    if not candidate.exists():
+        return candidate
+
+    idx = 2
+    while True:
+        alt = path.with_name(f"{stem}__{digest}_{idx}{suffix}")
+        if not alt.exists():
+            return alt
+        idx += 1

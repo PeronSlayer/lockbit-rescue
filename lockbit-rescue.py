@@ -51,9 +51,9 @@ from pathlib import Path
 
 from keystream_cache import extract_keystream, load_keystream, save_keystream
 from manifest import Manifest
-from output_layout import compute_output_relative, maybe_predict_name
+from output_layout import collision_safe_path, compute_output_relative, maybe_predict_name
 from phase2 import run_phase2_batches
-from report_utils import utc_now_iso, write_json_report
+from report_utils import utc_now_iso, write_html_report, write_json_report
 
 try:
     from tqdm import tqdm
@@ -252,6 +252,41 @@ def build_plan(groups, ransom_ext: str, use_all_extensions: bool = False, only_k
     return plans
 
 
+def summarize_plan(groups, plans, ransom_ext: str):
+    plan_by_kek = {kek: (oracle, targets) for _count, kek, oracle, targets in plans}
+    rows = []
+    for kek, members in sorted(groups.items()):
+        oracle_targets = plan_by_kek.get(kek)
+        if oracle_targets:
+            oracle, targets = oracle_targets
+            coverage = (oracle[0] - COVERAGE_BASE_FROM_FEI) + COVERAGE_OFFSET
+            phase2_candidates = sum(1 for m in members if m != oracle and m[0] > coverage)
+            status = "phase1" if targets else "phase2_only"
+            rows.append({
+                "kek": kek,
+                "files": len(members),
+                "oracle_name": oracle[1][: -len(ransom_ext)],
+                "oracle_fei_len": oracle[0],
+                "coverage_bytes": coverage,
+                "phase1_targets": len(targets),
+                "phase2_candidates": phase2_candidates,
+                "status": status,
+            })
+        else:
+            rows.append({
+                "kek": kek,
+                "files": len(members),
+                "oracle_name": "",
+                "oracle_fei_len": 0,
+                "coverage_bytes": 0,
+                "phase1_targets": 0,
+                "phase2_candidates": 0,
+                "status": "blocked_no_oracle",
+            })
+    rows.sort(key=lambda row: (-int(row.get("phase1_targets", 0)), -int(row.get("phase2_candidates", 0)), row["kek"]))
+    return rows
+
+
 def decrypt_target(tool: Path, target_path: Path, oracle_path: Path,
                    oracle_orig_name: str, scratch: Path, timeout: int = 600) -> Path:
     """Invoke stream-reuse. Returns the resulting 'decrypted' file path or None."""
@@ -340,8 +375,11 @@ def _phase1_group_worker(payload: dict):
     ok = review = fail = attempted = 0
     for fei_len, tfname, tpath, tsz, _ext_ok in targets:
         torig = tfname[: -len(args_ext)]
+        if manifest.has_source_status(tpath):
+            continue
         rel_out = compute_output_relative(tpath, source_root if restore_tree else None, args_ext, torig)
         out_path = group_out / rel_out
+        out_path = collision_safe_path(out_path, tpath)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         if out_path.exists():
             continue
@@ -498,6 +536,10 @@ def main():
                     help="Phase 2: disable multi-oracle keystream fusion")
     ap.add_argument("--report-json", default=None,
                     help="Write a JSON run report (phase stats, batch details, timings)")
+    ap.add_argument("--report-html", default=None,
+                    help="Write an HTML run report (scan/plan/recovery summary)")
+    ap.add_argument("--manifest-json", default=None,
+                    help="Write manifest rows as JSON (default: <output>/manifest.json when enabled)")
     ap.add_argument("--brute-extend", default=None,
                     help="Path to brute-extend binary for Phase 2 (default: ./brute-extend)")
     ap.add_argument("--direct-decrypt", default=None,
@@ -530,11 +572,17 @@ def main():
     }
 
     def flush_report():
-        if not args.report_json:
-            return
         report["duration_sec"] = round(time.time() - run_started, 3)
         report["generated_at"] = utc_now_iso()
-        write_json_report(Path(args.report_json), report)
+        if args.report_json:
+            write_json_report(Path(args.report_json), report)
+        if args.report_html:
+            write_html_report(Path(args.report_html), report)
+
+    def flush_manifest_json():
+        if args.manifest_json:
+            return manifest.export_json(Path(args.manifest_json))
+        return None
 
     # Locate stream-reuse
     here = Path(__file__).resolve().parent
@@ -647,18 +695,29 @@ def main():
         "groups_without_oracle": no_oracle,
         "targets_to_attempt": total_targets,
         "fallback_groups": sorted(fallback_keks),
+        "groups": summarize_plan(groups, plans, args.ext),
     }
+    phase2_candidates = sum(row.get("phase2_candidates", 0) for row in report["plan"]["groups"])
+    blocked_groups = sum(1 for row in report["plan"]["groups"] if row.get("status") == "blocked_no_oracle")
+    print(f"    phase2_candidates: {phase2_candidates}, blocked_groups: {blocked_groups}")
     if args.plan_only:
         if total_targets == 0:
             print("[!] Nothing to decrypt. Probably no group has a long-named oracle.")
         print("[*] Plan-only mode: no decryption performed.")
+        for row in report["plan"]["groups"][:10]:
+            print(
+                f"    group {row['kek']}: files={row['files']} phase1={row['phase1_targets']} "
+                f"phase2={row['phase2_candidates']} status={row['status']}"
+            )
         report["phase1"]["status"] = "plan_only"
         flush_report()
+        flush_manifest_json()
         return
     if total_targets == 0:
         print("[!] Nothing to decrypt. Probably no group has a long-named oracle.")
         report["phase1"]["status"] = "no_targets"
         flush_report()
+        flush_manifest_json()
         return
 
     # --- Resume bookkeeping ---
@@ -758,8 +817,13 @@ def main():
             t_start = time.time()
             for (fei_len, tfname, tpath, tsz, _ext_ok) in grp_bar:
                 torig = tfname[: -len(args.ext)]
+                if manifest.has_source_status(tpath):
+                    grp_ok += 1
+                    overall.update(1)
+                    continue
                 rel_out = compute_output_relative(tpath, source if args.restore_tree else None, args.ext, torig)
                 out_path = group_out / rel_out
+                out_path = collision_safe_path(out_path, tpath)
                 out_path.parent.mkdir(parents=True, exist_ok=True)
                 short = (torig[:35] + "...") if len(torig) > 35 else torig
                 grp_bar.set_postfix({"cur": short, "sz": fmt_size(tsz),
@@ -996,6 +1060,9 @@ def main():
         report["phase2"]["enabled"] = False
 
     print(f"[i] Tip: verify integrity with verify-recovered.py {output}")
+    manifest_json_path = flush_manifest_json()
+    if manifest_json_path:
+        print(f"[*] Manifest JSON: {manifest_json_path}")
     flush_report()
 
 

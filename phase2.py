@@ -22,7 +22,7 @@ from keystream_cache import (
     load_keystream,
     save_keystream,
 )
-from output_layout import compute_output_relative, maybe_predict_name
+from output_layout import collision_safe_path, compute_output_relative, maybe_predict_name
 
 MAGIC_DB = {
     "jpg": ["ffd8ffe000104a464946", "ffd8ffe100", "ffd8ffdb", "ffd8ffe2", "ffd8ffe800"],
@@ -327,8 +327,12 @@ def process_batch(
 
     for fei_len, fname, path, sz in targets:
         orig = fname[: -len(ransom_ext)]
+        if manifest and manifest.has_source_status(path):
+            ok += 1
+            continue
         rel_out = compute_output_relative(path, source_root if restore_tree else None, ransom_ext, orig)
         out_path = group_out / rel_out
+        out_path = collision_safe_path(out_path, path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
         if out_path.exists():

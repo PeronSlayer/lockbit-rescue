@@ -9,7 +9,7 @@ from pathlib import Path
 
 from manifest import Manifest
 from phase2 import detect_extension, run_phase2_batches, scan_batches
-from report_utils import utc_now_iso, write_json_report
+from report_utils import utc_now_iso, write_html_report, write_json_report
 
 
 def main():
@@ -53,6 +53,10 @@ def main():
                     help="Scan and print plan without running brute/direct decrypt")
     ap.add_argument("--report-json", default=None,
                     help="Write a JSON run report (phase stats, batch details, timings)")
+    ap.add_argument("--report-html", default=None,
+                    help="Write an HTML run report (scan/plan/phase summary)")
+    ap.add_argument("--manifest-json", default=None,
+                    help="Write manifest rows as JSON")
     args = ap.parse_args()
 
     if args.aggressive and args.max_brute_bytes <= 4:
@@ -79,11 +83,17 @@ def main():
     }
 
     def flush_report():
-        if not args.report_json:
-            return
         report["duration_sec"] = round(time.time() - run_started, 3)
         report["generated_at"] = utc_now_iso()
-        write_json_report(Path(args.report_json), report)
+        if args.report_json:
+            write_json_report(Path(args.report_json), report)
+        if args.report_html:
+            write_html_report(Path(args.report_html), report)
+
+    def flush_manifest_json():
+        if args.manifest_json:
+            return manifest.export_json(Path(args.manifest_json))
+        return None
 
     here = Path(__file__).resolve().parent
     brute_bin = Path(args.brute_extend) if args.brute_extend else (here / "brute-extend")
@@ -133,6 +143,7 @@ def main():
         report["phase2"]["enabled"] = False
         report["phase2"]["status"] = "plan_only"
         flush_report()
+        flush_manifest_json()
         return
 
     totals = run_phase2_batches(
@@ -174,6 +185,9 @@ def main():
     report["phase2"]["batches"] = totals.get("batches", [])
     report["phase2"]["status"] = "completed"
     flush_report()
+    manifest_json_path = flush_manifest_json()
+    if manifest_json_path:
+        print(f"[*] Manifest JSON: {manifest_json_path}")
 
 
 if __name__ == "__main__":

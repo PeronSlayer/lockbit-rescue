@@ -64,6 +64,42 @@ def _run(cmd: list[str], cwd: Path | None = None) -> int:
     return p.returncode
 
 
+def _fmt_size(num_bytes: int) -> str:
+    value = float(num_bytes)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if value < 1024:
+            return f"{value:.1f}{unit}"
+        value /= 1024
+    return f"{value:.1f}PB"
+
+
+def _count_candidate_files(source: Path) -> int:
+    total = 0
+    try:
+        for _dirpath, _dirnames, filenames in os.walk(source):
+            total += len(filenames)
+    except OSError:
+        return 0
+    return total
+
+
+def _ensure_output_folder(path: Path) -> bool:
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        return path.is_dir()
+    except OSError as exc:
+        print(f"[ERROR] Cannot create output folder: {exc}")
+        return False
+
+
+def _show_disk_space(path: Path):
+    try:
+        usage = shutil.disk_usage(path)
+    except OSError:
+        return
+    print(f"[i] Output free space: {_fmt_size(usage.free)}")
+
+
 def _run_recovery_ui(base: Path):
     print("\n=== Guided Recovery ===")
     src = Path(_ask("Encrypted SOURCE folder"))
@@ -72,6 +108,16 @@ def _run_recovery_ui(base: Path):
     if not src.exists() or not src.is_dir():
         print("[ERROR] Source folder not found.")
         return
+    if src.resolve() == out.resolve():
+        print("[ERROR] Source and output folders must be different.")
+        return
+    if not _ensure_output_folder(out):
+        return
+
+    _show_disk_space(out)
+    print(f"[i] Files visible under source: {_count_candidate_files(src)}")
+    if _is_windows():
+        print(f"[i] WSL backend detected: {'yes' if _has_wsl() else 'no'}")
 
     mode = _ask("Mode: standard/aggressive", "standard").lower()
     aggressive = mode.startswith("a")
@@ -79,6 +125,8 @@ def _run_recovery_ui(base: Path):
     predict_names = _ask_yes_no("Predict missing extensions with file magic", True)
     plan_only = _ask_yes_no("Plan-only (no decryption)", False)
     report_json = _ask("Optional report JSON path (blank to skip)", "").strip()
+    report_html = _ask("Optional report HTML path (blank to skip)", "").strip()
+    manifest_json = _ask("Optional manifest JSON path (blank for output\\manifest.json)", "").strip()
 
     ext = _ask("Ransom extension (leave blank for auto-detect)", "").strip()
 
@@ -95,6 +143,28 @@ def _run_recovery_ui(base: Path):
         args += ["--plan-only"]
     if report_json:
         args += ["--report-json", report_json]
+    if report_html:
+        args += ["--report-html", report_html]
+    if manifest_json:
+        args += ["--manifest-json", manifest_json]
+    elif not plan_only:
+        args += ["--manifest-json", str(out / "manifest.json")]
+
+    print("\n=== Recovery Summary ===")
+    print(f"Source:       {src}")
+    print(f"Output:       {out}")
+    print(f"Mode:         {'aggressive' if aggressive else 'standard'}")
+    print(f"Restore tree: {'yes' if restore_tree else 'no'}")
+    print(f"Predict ext:  {'yes' if predict_names else 'no'}")
+    print(f"Plan-only:    {'yes' if plan_only else 'no'}")
+    if report_json:
+        print(f"Report JSON:  {report_json}")
+    if report_html:
+        print(f"Report HTML:  {report_html}")
+    print("========================")
+    if not _ask_yes_no("Start with these settings", True):
+        print("Cancelled.")
+        return
 
     if _is_windows() and _has_wsl():
         use_wsl = _ask_yes_no("Use WSL backend (recommended on Windows)", True)
@@ -117,6 +187,15 @@ def _run_recovery_ui(base: Path):
                 if report_json:
                     rp = _to_wsl_path(Path(report_json))
                     wsl_args += ["--report-json", rp]
+                if report_html:
+                    rp = _to_wsl_path(Path(report_html))
+                    wsl_args += ["--report-html", rp]
+                if manifest_json:
+                    rp = _to_wsl_path(Path(manifest_json))
+                    wsl_args += ["--manifest-json", rp]
+                elif not plan_only:
+                    rp = _to_wsl_path(out / "manifest.json")
+                    wsl_args += ["--manifest-json", rp]
                 cmd_str = " ".join([shlex_quote(a) for a in wsl_args])
                 rc = _run(["wsl", "bash", "-lc", f"cd {shlex_quote(base_wsl)} && {cmd_str}"])
                 print("\n[OK] Finished with exit code", rc)

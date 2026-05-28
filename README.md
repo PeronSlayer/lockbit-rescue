@@ -154,8 +154,10 @@ Wizard flow:
 
 1. Choose "Guided recovery".
 2. Enter source/output folders.
-3. Pick standard or aggressive mode.
-4. Optionally enable plan-only and JSON report.
+3. Review output free space and WSL availability.
+4. Pick standard or aggressive mode.
+5. Optionally enable plan-only, JSON report, HTML report, and manifest JSON.
+6. Confirm the final run summary before starting.
 
 On Windows, the wizard can run through WSL backend (recommended), so non-expert users do not need to compose long command-line arguments manually.
 
@@ -182,6 +184,8 @@ python3 lockbit-rescue.py SOURCE_DIR OUTPUT_DIR
 | `--aggressive` | Wider coverage attempts (`--no-extension-filter`, deeper Phase 2) | off |
 | `--plan-only` | Scan and print recovery plan without decrypting | off |
 | `--report-json PATH` | Export a JSON execution report (scan/plan/phase stats) | off |
+| `--report-html PATH` | Export an HTML execution report for human review | off |
+| `--manifest-json PATH` | Export manifest rows as JSON | off |
 | `--stream-reuse PATH` | Path to the `stream-reuse` binary | auto-search |
 | `--scratch PATH` | Scratch dir for temp files | `OUTPUT/.scratch` |
 | `--timeout N` | Per-file decryption timeout (seconds) | 600 |
@@ -212,6 +216,14 @@ OUTPUT_DIR/
 > **Note**: filenames inside `group_*/` keep their original *basename*, not their original full path. If you need to map a recovered file back to the original directory tree, cross-reference by basename with your encrypted source. A future version may emit a `manifest.csv`.
 
 Use `--restore-tree` to keep original subdirectories under each `group_<kek>/`.
+
+When `--restore-tree` is disabled and different source files share the same basename, output collisions are resolved with a stable short source-hash suffix such as `report__1a2b3c4d.pdf`.
+
+### Reports and manifest
+
+Each recovery run writes `manifest.csv` in the output directory. Use `--manifest-json PATH` to also export the same rows as JSON with status totals.
+
+Use `--report-json PATH` for machine-readable scan/plan/phase details, or `--report-html PATH` for a compact human-readable summary with per-group recoverability indicators.
 
 ### Verifying results
 
@@ -291,6 +303,13 @@ Yes. Visit [No More Ransom](https://www.nomoreransom.org/) and use their "Crypto
 - `--restore-tree` preserves source hierarchy under each group output folder.
 - `--aggressive` expands attempts in both phases (all extensions, lower Phase 2 oracle threshold, fallback magic signatures).
 - `--report-json` writes a machine-readable run report with scan stats, per-group Phase 1 summary, and per-batch Phase 2 outcomes.
+
+### UX and recovery-quality notes (Sprints 8-9)
+- Guided wizard now validates source/output folders, shows output free space, reports WSL availability, and asks for final confirmation before running.
+- `--report-html` writes a human-readable recovery report with scan, plan, and per-group recoverability details.
+- `--manifest-json` exports manifest rows and status totals for downstream tooling.
+- Output basename collisions are resolved with stable source-hash suffixes instead of silently skipping unrelated files.
+
 See [BRUTEFORCE.md](docs/BRUTEFORCE.md) for a complete worked example (including the false-positive trap with short magic strings and the chunking-parameter requirements).
 
 ---
