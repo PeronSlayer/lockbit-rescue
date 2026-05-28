@@ -26,9 +26,11 @@ jobs:
           VERSION="${RELEASE_DATE}-${{ github.run_number }}"
           TAG="release-${VERSION}"
           TITLE="LockBit Rescue ${RELEASE_DATE} build ${{ github.run_number }}"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "title=${TITLE}" >> "$GITHUB_OUTPUT"
+          {
+            echo "version=${VERSION}"
+            echo "tag=${TAG}"
+            echo "title=${TITLE}"
+          } >> "$GITHUB_OUTPUT"
 
   build-linux:
     runs-on: ubuntu-latest
