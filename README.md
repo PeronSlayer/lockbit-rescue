@@ -119,7 +119,7 @@ Suggested lightweight release flow:
 The repository includes a release pipeline that runs on every push to `main`:
 
 - Workflow: `.github/workflows/release-on-push.yml`
-- Behavior: build binaries + package tarball + publish GitHub prerelease
+- Behavior: build Linux bundle + build Windows wizard executable + publish GitHub prerelease
 - Tag format: `auto-<run_number>-<full_sha>`
 
 Manual local bundle build:
@@ -129,6 +129,23 @@ bash scripts/build_release_bundle.sh
 ```
 
 This generates `dist/lockbit-rescue-<version>.tar.gz` with scripts, docs, and compiled helper binaries.
+
+## Windows CMD wizard (non-expert mode)
+
+For simpler usage on Windows CMD, use the guided wizard:
+
+- Script: `lockbit-wizard.py`
+- CMD launcher: `lockbit-wizard.cmd`
+- Windows executable (from release pipeline): `lockbit-wizard.exe`
+
+Wizard flow:
+
+1. Choose "Guided recovery".
+2. Enter source/output folders.
+3. Pick standard or aggressive mode.
+4. Optionally enable plan-only and JSON report.
+
+On Windows, the wizard can run through WSL backend (recommended), so non-expert users do not need to compose long command-line arguments manually.
 
 ---
 

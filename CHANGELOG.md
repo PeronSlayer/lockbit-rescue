@@ -146,6 +146,27 @@ All notable changes in this fork are documented here, grouped by sprint mileston
 - `.gitignore`
   - Added `dist/` for local release artifacts.
 
+## 2026-05-28 - Sprint 7 (Windows UX and Full Auto-Release)
+
+### Added
+- Guided Windows/CMD user interface:
+  - `lockbit-wizard.py`
+  - `lockbit-wizard.cmd`
+  - Menu-driven recovery/verify flow designed for non-expert users.
+- WSL backend support in wizard for Windows execution paths.
+
+### Changed
+- `.github/workflows/release-on-push.yml`
+  - Added Windows build job with PyInstaller (`lockbit-wizard.exe`).
+  - Added packaging of Windows ZIP bundle.
+  - Release job now publishes both Linux tarball and Windows ZIP on every push to `main`.
+- `scripts/build_release_bundle.sh`
+  - Includes wizard files in distribution and compile checks.
+- `.github/workflows/ci.yml`
+  - Compile checks now include `lockbit-wizard.py`.
+- `README.md`
+  - Documented CMD wizard usage and Windows release artifact behavior.
+
 ---
 
 Notes:

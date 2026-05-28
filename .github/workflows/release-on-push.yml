@@ -8,8 +8,10 @@ permissions:
   contents: write
 
 jobs:
-  build-and-release:
+  build-linux:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.bundle.outputs.version }}
 
     steps:
       - name: Checkout
@@ -42,14 +44,72 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: lockbit-rescue-${{ steps.bundle.outputs.version }}
+          name: linux-bundle
           path: ${{ steps.bundle.outputs.tarball }}
+
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Build wizard executable
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller
+          pyinstaller --noconfirm --onefile --name lockbit-wizard lockbit-wizard.py
+
+      - name: Create Windows package
+        shell: pwsh
+        run: |
+          $version = "auto-${{ github.run_number }}-${{ github.sha }}"
+          $pkgDir = "dist/lockbit-rescue-windows-$version"
+          New-Item -ItemType Directory -Force -Path $pkgDir | Out-Null
+          Copy-Item "dist/lockbit-wizard.exe" "$pkgDir/lockbit-wizard.exe"
+          Copy-Item "lockbit-wizard.py" "$pkgDir/lockbit-wizard.py"
+          Copy-Item "lockbit-wizard.cmd" "$pkgDir/lockbit-wizard.cmd"
+          Copy-Item "lockbit-rescue.py" "$pkgDir/lockbit-rescue.py"
+          Copy-Item "lockbit-extend.py" "$pkgDir/lockbit-extend.py"
+          Copy-Item "verify-recovered.py" "$pkgDir/verify-recovered.py"
+          Copy-Item "manifest.py" "$pkgDir/manifest.py"
+          Copy-Item "keystream_cache.py" "$pkgDir/keystream_cache.py"
+          Copy-Item "phase2.py" "$pkgDir/phase2.py"
+          Copy-Item "output_layout.py" "$pkgDir/output_layout.py"
+          Copy-Item "report_utils.py" "$pkgDir/report_utils.py"
+          Copy-Item "README.md" "$pkgDir/README.md"
+          Copy-Item "LICENSE" "$pkgDir/LICENSE"
+          Copy-Item "CHANGELOG.md" "$pkgDir/CHANGELOG.md"
+          Copy-Item "requirements.txt" "$pkgDir/requirements.txt"
+          Compress-Archive -Path "$pkgDir/*" -DestinationPath "dist/lockbit-rescue-windows-$version.zip" -Force
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-bundle
+          path: dist/lockbit-rescue-windows-auto-${{ github.run_number }}-${{ github.sha }}.zip
+
+  publish-release:
+    runs-on: ubuntu-latest
+    needs: [build-linux, build-windows]
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: auto-${{ github.run_number }}-${{ github.sha }}
-          name: Automated Release ${{ steps.bundle.outputs.version }}
+          name: Automated Release auto-${{ github.run_number }}-${{ github.sha }}
           body: |
             Automated build+release from commit `${{ github.sha }}`.
 
@@ -58,4 +118,5 @@ jobs:
             - Trigger: push to `main`
           prerelease: true
           files: |
-            ${{ steps.bundle.outputs.tarball }}
+            release-assets/**/*.tar.gz
+            release-assets/**/*.zip

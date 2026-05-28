@@ -23,6 +23,7 @@ bash "${ROOT_DIR}/install.sh"
 python3 -m py_compile \
   lockbit-rescue.py \
   lockbit-extend.py \
+  lockbit-wizard.py \
   verify-recovered.py \
   manifest.py \
   keystream_cache.py \
@@ -33,6 +34,7 @@ python3 -m py_compile \
 # Package distribution files.
 cp -f LICENSE README.md CHANGELOG.md requirements.txt install.sh "${BUNDLE_DIR}/"
 cp -f lockbit-rescue.py lockbit-extend.py verify-recovered.py "${BUNDLE_DIR}/"
+cp -f lockbit-wizard.py lockbit-wizard.cmd "${BUNDLE_DIR}/"
 cp -f manifest.py keystream_cache.py phase2.py output_layout.py report_utils.py "${BUNDLE_DIR}/"
 cp -f brute-extend direct-decrypt stream-reuse "${BUNDLE_DIR}/"
 cp -rf docs src "${BUNDLE_DIR}/"
