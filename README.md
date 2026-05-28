@@ -1,5 +1,7 @@
 # lockbit-rescue
 
+[![CI](https://github.com/PeronSlayer/lockbit-rescue/actions/workflows/ci.yml/badge.svg)](https://github.com/PeronSlayer/lockbit-rescue/actions/workflows/ci.yml)
+
 Recover files encrypted by **LockBit 3.0 ("Black") / CriptomanGizmo** without paying the ransom, by exploiting the documented **keystream-reuse weakness** in its file-encryption routine.
 
 This tool can decrypt a meaningful subset of files for free, **without the attacker's private key**, provided your encrypted batch contains at least one file whose original filename was long enough to act as a *known-plaintext oracle*.
@@ -93,6 +95,24 @@ pytest -q
 ```
 
 CI is configured with GitHub Actions in `.github/workflows/ci.yml` and runs compile checks plus the test suite on push/PR.
+
+## Branch protection recommendations
+
+For safer releases on the fork, configure branch protection on `main` with:
+
+- Require a pull request before merging.
+- Require status checks to pass before merging.
+- Mark `CI / test` (or the exact check name shown in your repository) as required.
+- Require branches to be up to date before merging.
+- Restrict direct pushes to `main` (optional but recommended).
+- Require at least 1 approval for PRs (recommended for collaborative maintenance).
+
+Suggested lightweight release flow:
+
+1. Open PR from a feature branch.
+2. Ensure CI is green.
+3. Merge via squash commit.
+4. Tag release (`vX.Y.Z`) and publish release notes from `CHANGELOG.md`.
 
 ---
 

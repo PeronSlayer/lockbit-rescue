@@ -128,6 +128,14 @@ All notable changes in this fork are documented here, grouped by sprint mileston
 - `README.md`
   - Added local quality-check commands and CI workflow reference.
 
+## 2026-05-28 - Sprint 6 (Governance and Release Hygiene)
+
+### Changed
+- `README.md`
+  - Added CI badge at top-level project header.
+  - Added branch protection recommendations for `main`.
+  - Added lightweight release flow guidance (PR -> CI -> squash -> tag -> release notes).
+
 ---
 
 Notes:
