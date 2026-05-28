@@ -33,6 +33,7 @@ The tool will:
 5. Decrypt every other file in the group whose footer is short enough to fit under the recovered keystream coverage.
 6. Save them under `OUTPUT/group_<kek>/<original_name>`.
 7. Skip writes where libmagic reports raw `data` (a botched decryption).
+8. Automatically run Phase 2 on remaining files in each decryptable batch (unless disabled).
 
 It is **resumable** — re-run the same command if interrupted; it skips work already on disk.
 
@@ -100,9 +101,24 @@ python3 lockbit-rescue.py SOURCE_DIR OUTPUT_DIR
 | `--min-size N` | Skip files smaller than N bytes | 10240 (10 KiB) |
 | `--max-size N` | Skip files larger than N bytes | 1073741824 (1 GiB) |
 | `--no-extension-filter` | Don't filter by original file type — try EVERYTHING | off |
+| `--restore-tree` | Preserve source subdirectories under each `group_<kek>/` | off |
+| `--predict-names` | Append extension via libmagic for extensionless recovered files | off |
+| `--aggressive` | Wider coverage attempts (`--no-extension-filter`, deeper Phase 2) | off |
+| `--plan-only` | Scan and print recovery plan without decrypting | off |
+| `--report-json PATH` | Export a JSON execution report (scan/plan/phase stats) | off |
 | `--stream-reuse PATH` | Path to the `stream-reuse` binary | auto-search |
 | `--scratch PATH` | Scratch dir for temp files | `OUTPUT/.scratch` |
 | `--timeout N` | Per-file decryption timeout (seconds) | 600 |
+| `--jobs N` | Phase 1 parallel groups | min(4, cpu_count) |
+| `--no-phase2` | Disable automatic Phase 2 handoff | off |
+| `--phase2-max-brute-bytes N` | Phase 2 per-file brute gap limit | 4 |
+| `--phase2-brute-timeout N` | Phase 2 brute timeout seconds | 900 |
+| `--phase2-brute-retry-timeout N` | Phase 2 retry timeout seconds | 1800 |
+| `--phase2-jobs N` | Phase 2 parallel batches | min(4, cpu_count) |
+| `--phase2-brute-threads N` | Threads per brute-extend process | cpu_count |
+| `--phase2-no-fusion` | Disable multi-oracle keystream fusion | off |
+| `--brute-extend PATH` | Phase 2 brute binary path | auto-search |
+| `--direct-decrypt PATH` | Phase 2 direct decrypt binary path | auto-search |
 
 ### Output layout
 
@@ -118,6 +134,8 @@ OUTPUT_DIR/
 ```
 
 > **Note**: filenames inside `group_*/` keep their original *basename*, not their original full path. If you need to map a recovered file back to the original directory tree, cross-reference by basename with your encrypted source. A future version may emit a `manifest.csv`.
+
+Use `--restore-tree` to keep original subdirectories under each `group_<kek>/`.
 
 ### Verifying results
 
@@ -179,11 +197,24 @@ Yes. Visit [No More Ransom](https://www.nomoreransom.org/) and use their "Crypto
 - `docs/STORY.md` — chronicle of the recovery operation this tool was built from (now includes Phase 11)
 - `LICENSE` / credits — see end of this file
 ## Advanced: recovering files the main flow had to skip
-The main `lockbit-rescue.py` flow only decrypts files whose `fei_len ≤ ~106` (the natural coverage from a long-named oracle). Files in the same batch with longer FEIs are skipped.
-If you want to push further:
+`lockbit-rescue.py` now chains Phase 1 and Phase 2 automatically by default. If you want to run Phase 2 manually, or tune it for slow hardware/time budgets:
 1. Use `brute-extend` to extend the keystream byte-by-byte, climbing a ladder of intermediate-fei_len files in the same batch. 1–3 byte extensions are essentially instant; a 4-byte extension takes ~9 minutes at 2³² iterations.
 2. With each successful extension you also recover that target's `file_encryption_key` (the 64-byte Salsa20 state for its body).
 3. Use `direct-decrypt` with that key plus the batch's `before/after/skipped` parameters to recover the full file body.
+4. The standalone `lockbit-extend.py` entrypoint uses the same shared Phase 2 module as `lockbit-rescue.py`, so behavior is consistent between automatic and manual workflows.
+
+### Performance notes (Sprint 3)
+- Inter-batch parallelization is now available in both phases (`--jobs`, `--phase2-jobs`).
+- `brute-extend` now supports multithread brute force through `BRUTE_THREADS`; Python wrappers expose this as `--phase2-brute-threads` and `lockbit-extend.py --brute-threads`.
+- Phase 2 no longer stages each target file to scratch before brute/direct decrypt: it reads the needed regions directly from source paths.
+- Phase 1 copy path uses `os.sendfile()` when available for faster kernel-level file transfer.
+
+### Coverage and UX notes (Sprint 4)
+- `--plan-only` lets you estimate recoverable groups/targets before running decryption.
+- `--predict-names` appends a guessed extension from libmagic when decrypted names have no suffix.
+- `--restore-tree` preserves source hierarchy under each group output folder.
+- `--aggressive` expands attempts in both phases (all extensions, lower Phase 2 oracle threshold, fallback magic signatures).
+- `--report-json` writes a machine-readable run report with scan stats, per-group Phase 1 summary, and per-batch Phase 2 outcomes.
 See [BRUTEFORCE.md](docs/BRUTEFORCE.md) for a complete worked example (including the false-positive trap with short magic strings and the chunking-parameter requirements).
 
 ---

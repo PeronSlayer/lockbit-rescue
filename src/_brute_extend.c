@@ -41,6 +41,7 @@
 #include <sys/types.h>
 #include <fcntl.h>
 #include <time.h>
+#include <pthread.h>
 #include "aplib.h"
 #include <iconv.h>
 
@@ -129,6 +130,59 @@ static int parse_hex_bytes(const char *s, uint8_t *out, int max_bytes) {
     return n;
 }
 
+typedef struct {
+    uint64_t start;
+    uint64_t end;
+    int missing;
+    int known_len;
+    int key_offset;
+    int magic_len;
+    const uint8_t *ks_base;
+    const uint8_t *tfei;
+    const uint8_t *first_chunk;
+    const uint8_t *magic;
+    volatile int *found;
+    uint64_t *found_guess;
+} brute_args_t;
+
+static void *brute_worker(void *arg) {
+    brute_args_t *a = (brute_args_t *)arg;
+    int ks_len = a->known_len + a->missing;
+    uint8_t *ks_local = (uint8_t *)malloc(ks_len);
+    if (!ks_local) return NULL;
+    memcpy(ks_local, a->ks_base, a->known_len);
+
+    uint32_t state[16];
+    uint8_t keyblock[64];
+
+    for (uint64_t guess = a->start; guess < a->end && !__atomic_load_n(a->found, __ATOMIC_ACQUIRE); guess++) {
+        for (int i = 0; i < a->missing; i++) {
+            ks_local[a->known_len + i] = (guess >> (i * 8)) & 0xFF;
+        }
+        for (int i = 0; i < 16; i++) {
+            state[i] = ((uint32_t)(a->tfei[a->key_offset + i*4 + 0] ^ ks_local[a->key_offset + i*4 + 0]))
+                     | ((uint32_t)(a->tfei[a->key_offset + i*4 + 1] ^ ks_local[a->key_offset + i*4 + 1])) << 8
+                     | ((uint32_t)(a->tfei[a->key_offset + i*4 + 2] ^ ks_local[a->key_offset + i*4 + 2])) << 16
+                     | ((uint32_t)(a->tfei[a->key_offset + i*4 + 3] ^ ks_local[a->key_offset + i*4 + 3])) << 24;
+        }
+        salsa20_block(state, keyblock);
+
+        int ok = 1;
+        for (int i = 0; i < a->magic_len; i++) {
+            if ((a->first_chunk[i] ^ keyblock[i]) != a->magic[i]) { ok = 0; break; }
+        }
+        if (!ok) continue;
+
+        if (__sync_bool_compare_and_swap(a->found, 0, 1)) {
+            *a->found_guess = guess;
+        }
+        break;
+    }
+
+    free(ks_local);
+    return NULL;
+}
+
 int main(int argc, char *argv[]) {
     if (argc < 9) {
         fprintf(stderr, "Usage: %s <target> <oracle> <oracle_name> <magic_hex> <max_bytes> "
@@ -145,6 +199,16 @@ int main(int argc, char *argv[]) {
     uint32_t after_count  = (uint32_t)strtoul(argv[7], NULL, 0);
     uint64_t skipped_bytes = (uint64_t)strtoull(argv[8], NULL, 0);
     const char *ks_extend_hex = (argc > 9) ? argv[9] : NULL;
+    int brute_threads = 1;
+    const char *env_threads = getenv("BRUTE_THREADS");
+    if (env_threads && *env_threads) {
+        int t = atoi(env_threads);
+        if (t > 0) brute_threads = t;
+    }
+    if (argc > 10) {
+        int t = atoi(argv[10]);
+        if (t > 0) brute_threads = t;
+    }
 
     int magic_len = strlen(magic_hex) / 2;
     if (magic_len > 16) { fprintf(stderr, "Magic too long (max 16 bytes)\n"); return 1; }
@@ -271,16 +335,57 @@ int main(int argc, char *argv[]) {
             missing, (unsigned long long)total_iters);
 
     time_t start = time(NULL);
-    uint64_t report_interval = total_iters > 100000000 ? total_iters / 100 : total_iters + 1;
-
     int key_offset = tfl - 64;
-    uint32_t state[16];
-    uint8_t keyblock[64];
+    if (brute_threads < 1) brute_threads = 1;
+    if ((uint64_t)brute_threads > total_iters) brute_threads = (int)total_iters;
+    if (brute_threads < 1) brute_threads = 1;
 
-    for (uint64_t guess = 0; guess < total_iters; guess++) {
+    fprintf(stderr, "[*] using %d thread(s)\n", brute_threads);
+
+    volatile int found = 0;
+    uint64_t found_guess = 0;
+
+    pthread_t *threads = (pthread_t *)calloc(brute_threads, sizeof(pthread_t));
+    brute_args_t *args = (brute_args_t *)calloc(brute_threads, sizeof(brute_args_t));
+    if (!threads || !args) {
+        fprintf(stderr, "[!] allocation failure for thread structures\n");
+        return 5;
+    }
+
+    uint64_t chunk = total_iters / (uint64_t)brute_threads;
+    uint64_t rem = total_iters % (uint64_t)brute_threads;
+    uint64_t cur = 0;
+    for (int i = 0; i < brute_threads; i++) {
+        uint64_t span = chunk + (i < (int)rem ? 1ULL : 0ULL);
+        args[i].start = cur;
+        args[i].end = cur + span;
+        args[i].missing = missing;
+        args[i].known_len = known_len;
+        args[i].key_offset = key_offset;
+        args[i].magic_len = magic_len;
+        args[i].ks_base = ks;
+        args[i].tfei = tfei;
+        args[i].first_chunk = first_chunk;
+        args[i].magic = magic;
+        args[i].found = &found;
+        args[i].found_guess = &found_guess;
+        cur += span;
+        pthread_create(&threads[i], NULL, brute_worker, &args[i]);
+    }
+
+    for (int i = 0; i < brute_threads; i++) {
+        pthread_join(threads[i], NULL);
+    }
+
+    free(threads);
+    free(args);
+
+    if (__atomic_load_n(&found, __ATOMIC_ACQUIRE)) {
         for (int i = 0; i < missing; i++) {
-            ks[known_len + i] = (guess >> (i * 8)) & 0xFF;
+            ks[known_len + i] = (found_guess >> (i * 8)) & 0xFF;
         }
+        uint32_t state[16];
+        uint8_t keyblock[64];
         for (int i = 0; i < 16; i++) {
             state[i] = ((uint32_t)(tfei[key_offset + i*4 + 0] ^ ks[key_offset + i*4 + 0]))
                      | ((uint32_t)(tfei[key_offset + i*4 + 1] ^ ks[key_offset + i*4 + 1])) << 8
@@ -288,38 +393,25 @@ int main(int argc, char *argv[]) {
                      | ((uint32_t)(tfei[key_offset + i*4 + 3] ^ ks[key_offset + i*4 + 3])) << 24;
         }
         salsa20_block(state, keyblock);
-        int ok = 1;
-        for (int i = 0; i < magic_len; i++) {
-            if ((first_chunk[i] ^ keyblock[i]) != magic[i]) { ok = 0; break; }
-        }
-        if (ok) {
-            time_t elapsed = time(NULL) - start;
-            fprintf(stderr, "[+] MATCH at guess=0x%llx after %llu iters (%lds)\n",
-                    (unsigned long long)guess, (unsigned long long)(guess + 1), (long)elapsed);
-            // Emit machine-parseable results
-            printf("KSEXT:");
-            for (int i = 0; i < missing; i++) printf("%02x", ks[known_len + i]);
-            printf("\n");
-            uint8_t fek[64];
-            for (int i = 0; i < 64; i++) fek[i] = tfei[key_offset + i] ^ ks[key_offset + i];
-            printf("FEK:");
-            for (int i = 0; i < 64; i++) printf("%02x", fek[i]);
-            printf("\n");
-            printf("DEC32:");
-            for (int i = 0; i < 32; i++) printf("%02x", first_chunk[i] ^ keyblock[i]);
-            printf("\n");
-            printf("STATUS:OK_BRUTE\n");
-            return 0;
-        }
-        if (guess > 0 && (guess % report_interval) == 0) {
-            time_t elapsed = time(NULL) - start;
-            double rate = (double)guess / (elapsed > 0 ? elapsed : 1);
-            double pct = 100.0 * (double)guess / (double)total_iters;
-            long eta = (long)(((double)total_iters - guess) / rate);
-            fprintf(stderr, "[..] %llu / %llu (%.2f%%) rate=%.0f/s ETA=%lds\n",
-                    (unsigned long long)guess, (unsigned long long)total_iters, pct, rate, eta);
-        }
+
+        time_t elapsed = time(NULL) - start;
+        fprintf(stderr, "[+] MATCH at guess=0x%llx (%lds)\n",
+                (unsigned long long)found_guess, (long)elapsed);
+        printf("KSEXT:");
+        for (int i = 0; i < missing; i++) printf("%02x", ks[known_len + i]);
+        printf("\n");
+        uint8_t fek[64];
+        for (int i = 0; i < 64; i++) fek[i] = tfei[key_offset + i] ^ ks[key_offset + i];
+        printf("FEK:");
+        for (int i = 0; i < 64; i++) printf("%02x", fek[i]);
+        printf("\n");
+        printf("DEC32:");
+        for (int i = 0; i < 32; i++) printf("%02x", first_chunk[i] ^ keyblock[i]);
+        printf("\n");
+        printf("STATUS:OK_BRUTE\n");
+        return 0;
     }
+
     fprintf(stderr, "[!] no match after %llu iterations\n", (unsigned long long)total_iters);
     printf("STATUS:NO_MATCH\n");
     return 4;

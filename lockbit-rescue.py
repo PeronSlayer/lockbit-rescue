@@ -39,6 +39,7 @@ Usage examples:
 
 import argparse
 import collections
+import concurrent.futures
 import hashlib
 import os
 import shutil
@@ -47,6 +48,12 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+from keystream_cache import extract_keystream, load_keystream, save_keystream
+from manifest import Manifest
+from output_layout import compute_output_relative, maybe_predict_name
+from phase2 import run_phase2_batches
+from report_utils import utc_now_iso, write_json_report
 
 try:
     from tqdm import tqdm
@@ -130,6 +137,12 @@ def is_target(fname: str, ransom_ext: str, common_exts, no_extension_filter: boo
     return base.rsplit(".", 1)[1].lower() in common_exts
 
 
+def original_extension(base_name: str) -> str:
+    if "." not in base_name:
+        return ""
+    return base_name.rsplit(".", 1)[-1].lower()
+
+
 def fmt_size(b: int) -> str:
     for u in ["B", "KB", "MB", "GB", "TB"]:
         if b < 1024:
@@ -146,12 +159,22 @@ def copy_with_progress(src: Path, dst: Path, label: str, position: int = 2):
     )
     try:
         with open(src, "rb") as fi, open(dst, "wb") as fo:
-            while True:
-                buf = fi.read(1024 * 1024)
-                if not buf:
-                    break
-                fo.write(buf)
-                bar.update(len(buf))
+            use_sendfile = hasattr(os, "sendfile")
+            if use_sendfile:
+                offset = 0
+                while offset < sz:
+                    sent = os.sendfile(fo.fileno(), fi.fileno(), offset, min(8 * 1024 * 1024, sz - offset))
+                    if sent == 0:
+                        break
+                    offset += sent
+                    bar.update(sent)
+            else:
+                while True:
+                    buf = fi.read(1024 * 1024)
+                    if not buf:
+                        break
+                    fo.write(buf)
+                    bar.update(len(buf))
     finally:
         bar.close()
 
@@ -192,28 +215,37 @@ def scan(source: Path, ransom_ext: str, common_exts, no_extension_filter: bool,
             if sz > max_size:
                 skipped_size += 1
                 continue
-            if not is_target(fname, ransom_ext, common_exts, no_extension_filter):
-                continue
-            matched += 1
+            ext_ok = is_target(fname, ransom_ext, common_exts, no_extension_filter)
+            if ext_ok:
+                matched += 1
             try:
                 fei_len, kek_blob = read_footer(fpath)
             except (OSError, struct.error):
                 continue
-            groups[kek_fingerprint(kek_blob)].append((fei_len, fname, str(fpath), sz))
+            groups[kek_fingerprint(kek_blob)].append((fei_len, fname, str(fpath), sz, ext_ok))
             bar.set_postfix({"match": matched, "grp": len(groups), "skipped_big": skipped_size})
     bar.close()
     return groups, scanned, matched, skipped_size
 
 
-def build_plan(groups, ransom_ext: str):
+def build_plan(groups, ransom_ext: str, use_all_extensions: bool = False, only_keks=None):
     """Choose an oracle for each group and list decryptable targets."""
+    selected_keks = set(only_keks) if only_keks is not None else None
     plans = []
     for kek, members in groups.items():
+        if selected_keks is not None and kek not in selected_keks:
+            continue
+        if use_all_extensions:
+            candidates = list(members)
+        else:
+            candidates = [m for m in members if m[4]]
+        if not candidates:
+            continue
         # Oracle = the file in this batch with the largest fei_len
-        members.sort(key=lambda x: -x[0])
-        oracle = members[0]
+        candidates.sort(key=lambda x: -x[0])
+        oracle = candidates[0]
         coverage = (oracle[0] - COVERAGE_BASE_FROM_FEI) + COVERAGE_OFFSET
-        targets = [m for m in members if m[0] <= coverage and m != oracle]
+        targets = [m for m in candidates if m[0] <= coverage and m != oracle]
         if targets:
             plans.append((len(targets), kek, oracle, targets))
     plans.sort(key=lambda x: -x[0])
@@ -250,6 +282,168 @@ def is_bad_decrypt(ftype: str) -> bool:
     return f.startswith("data") or "corrupted" in f or f in ("", "empty")
 
 
+def _fast_copy(src: Path, dst: Path):
+    sz = os.path.getsize(src)
+    with open(src, "rb") as fi, open(dst, "wb") as fo:
+        if hasattr(os, "sendfile"):
+            offset = 0
+            while offset < sz:
+                sent = os.sendfile(fo.fileno(), fi.fileno(), offset, min(8 * 1024 * 1024, sz - offset))
+                if sent == 0:
+                    break
+                offset += sent
+        else:
+            while True:
+                buf = fi.read(1024 * 1024)
+                if not buf:
+                    break
+                fo.write(buf)
+
+
+def _phase1_group_worker(payload: dict):
+    output = Path(payload["output"])
+    scratch_root = Path(payload["scratch"]) / ".parallel_phase1"
+    scratch_root.mkdir(parents=True, exist_ok=True)
+    manifest = Manifest(output)
+
+    kek = payload["kek"]
+    args_ext = payload["args_ext"]
+    tool = Path(payload["tool"])
+    timeout = int(payload["timeout"])
+    oracle = payload["oracle"]
+    targets = payload["targets"]
+    source_root = Path(payload["source_root"]) if payload.get("source_root") else None
+    restore_tree = bool(payload.get("restore_tree", False))
+    predict_names = bool(payload.get("predict_names", False))
+    t_start = time.time()
+
+    oracle_fei_len, oracle_fname, oracle_path, _oracle_sz, _oracle_ext_ok = oracle
+    oracle_orig = oracle_fname[: -len(args_ext)]
+
+    group_out = output / f"group_{kek}"
+    group_out.mkdir(parents=True, exist_ok=True)
+    review_dir = group_out / "_needs_review"
+    review_dir.mkdir(exist_ok=True)
+
+    cached = load_keystream(group_out)
+    ks_cached = cached is not None
+
+    local_scratch = scratch_root / f"{os.getpid()}_{kek}"
+    local_scratch.mkdir(parents=True, exist_ok=True)
+    local_oracle = local_scratch / f"_oracle_{kek}{args_ext}"
+    try:
+        _fast_copy(Path(oracle_path), local_oracle)
+    except Exception:
+        shutil.rmtree(local_scratch, ignore_errors=True)
+        return {"ok": 0, "review": 0, "fail": len(targets), "attempted": len(targets)}
+
+    ok = review = fail = attempted = 0
+    for fei_len, tfname, tpath, tsz, _ext_ok in targets:
+        torig = tfname[: -len(args_ext)]
+        rel_out = compute_output_relative(tpath, source_root if restore_tree else None, args_ext, torig)
+        out_path = group_out / rel_out
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        if out_path.exists():
+            continue
+        attempted += 1
+
+        local_target = local_scratch / f"_target{args_ext}"
+        try:
+            _fast_copy(Path(tpath), local_target)
+        except Exception:
+            fail += 1
+            continue
+
+        decrypted = decrypt_target(tool, local_target, local_oracle, oracle_orig, local_scratch, timeout)
+        if decrypted is None:
+            fail += 1
+            manifest.add(kek, torig, original_extension(torig), tpath, "", "FAIL", "", tsz, fei_len)
+        else:
+            ftype = libmagic(decrypted)
+            if is_bad_decrypt(ftype):
+                review_path = review_dir / rel_out
+                review_path.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    _fast_copy(decrypted, review_path)
+                    review += 1
+                    manifest.add(
+                        kek,
+                        torig,
+                        original_extension(torig),
+                        tpath,
+                        str(review_path),
+                        "REVIEW",
+                        ftype,
+                        tsz,
+                        fei_len,
+                    )
+                except Exception:
+                    fail += 1
+                    manifest.add(kek, torig, original_extension(torig), tpath, "", "FAIL", ftype, tsz, fei_len)
+            else:
+                try:
+                    final_out = maybe_predict_name(out_path, ftype, predict_names)
+                    _fast_copy(decrypted, out_path)
+                    if final_out != out_path:
+                        final_out.parent.mkdir(parents=True, exist_ok=True)
+                        out_path.rename(final_out)
+                    out_path = final_out
+                    ok += 1
+                    manifest.add(
+                        kek,
+                        torig,
+                        original_extension(torig),
+                        tpath,
+                        str(out_path),
+                        "OK",
+                        ftype,
+                        tsz,
+                        fei_len,
+                    )
+                    if not ks_cached:
+                        try:
+                            ks_bytes, ks_meta = extract_keystream(Path(oracle_path), oracle_orig)
+                            save_keystream(
+                                group_out,
+                                ks_bytes,
+                                {
+                                    "oracle_name": oracle_orig,
+                                    "oracle_path": str(oracle_path),
+                                    "oracle_fei_len": oracle_fei_len,
+                                    "ransom_ext": args_ext,
+                                    "known_len": ks_meta.get("known_len"),
+                                    "source": "phase1_oracle_extract",
+                                },
+                            )
+                            ks_cached = True
+                        except Exception:
+                            pass
+                except Exception:
+                    fail += 1
+                    manifest.add(kek, torig, original_extension(torig), tpath, "", "FAIL", ftype, tsz, fei_len)
+
+            try:
+                decrypted.unlink()
+            except Exception:
+                pass
+
+        try:
+            local_target.unlink()
+        except Exception:
+            pass
+
+    shutil.rmtree(local_scratch, ignore_errors=True)
+    return {
+        "kek": kek,
+        "ok": ok,
+        "review": review,
+        "fail": fail,
+        "attempted": attempted,
+        "targets": len(targets),
+        "duration_sec": round(time.time() - t_start, 3),
+    }
+
+
 def main():
     ap = argparse.ArgumentParser(
         description="Recover files encrypted by LockBit 3.0 via keystream reuse",
@@ -268,11 +462,52 @@ def main():
                     help="Maximum file size to attempt (default: 1 GiB)")
     ap.add_argument("--no-extension-filter", action="store_true",
                     help="Try to decrypt ALL files, not only common formats")
+    ap.add_argument("--restore-tree", action="store_true",
+                    help="Preserve source subdirectories inside each group_<kek> output")
+    ap.add_argument("--predict-names", action="store_true",
+                    help="Append extension by libmagic when decrypted filename has no suffix")
+    ap.add_argument("--aggressive", action="store_true",
+                    help="Increase coverage attempts (implies --no-extension-filter and deeper Phase 2)")
+    ap.add_argument("--plan-only", action="store_true",
+                    help="Scan and print plan without decrypting files")
     ap.add_argument("--scratch", default=None,
                     help="Scratch directory for per-job temp files (default: <output>/.scratch)")
     ap.add_argument("--timeout", type=int, default=600,
                     help="Per-file decryption timeout in seconds (default: 600)")
+    ap.add_argument("--jobs", type=int, default=max(1, min(4, (os.cpu_count() or 1))),
+                    help="Parallel groups for Phase 1 (default: min(4, cpu_count))")
+    ap.add_argument("--no-phase2", action="store_true",
+                    help="Disable automatic Phase 2 (keystream extension) pass")
+    ap.add_argument("--phase2-max-brute-bytes", type=int, default=4,
+                    help="Phase 2: max keystream bytes to brute-force per file (default: 4)")
+    ap.add_argument("--phase2-before-chunk", type=int, default=None,
+                    help="Phase 2 override: before_chunk_count (auto-detected when omitted)")
+    ap.add_argument("--phase2-after-chunk", type=int, default=None,
+                    help="Phase 2 override: after_chunk_count (auto-detected when omitted)")
+    ap.add_argument("--phase2-skipped-hex", default=None,
+                    help="Phase 2 override: skipped_bytes hex (auto-detected when omitted)")
+    ap.add_argument("--phase2-brute-timeout", type=int, default=900,
+                    help="Phase 2: brute timeout seconds (default: 900)")
+    ap.add_argument("--phase2-brute-retry-timeout", type=int, default=1800,
+                    help="Phase 2: retry timeout seconds after timeout (default: 1800)")
+    ap.add_argument("--phase2-jobs", type=int, default=max(1, min(4, (os.cpu_count() or 1))),
+                    help="Phase 2: parallel batches (default: min(4, cpu_count))")
+    ap.add_argument("--phase2-brute-threads", type=int, default=max(1, (os.cpu_count() or 1)),
+                    help="Phase 2: threads per brute-extend process (default: cpu_count)")
+    ap.add_argument("--phase2-no-fusion", action="store_true",
+                    help="Phase 2: disable multi-oracle keystream fusion")
+    ap.add_argument("--report-json", default=None,
+                    help="Write a JSON run report (phase stats, batch details, timings)")
+    ap.add_argument("--brute-extend", default=None,
+                    help="Path to brute-extend binary for Phase 2 (default: ./brute-extend)")
+    ap.add_argument("--direct-decrypt", default=None,
+                    help="Path to direct-decrypt binary for Phase 2 (default: ./direct-decrypt)")
     args = ap.parse_args()
+
+    if args.aggressive:
+        args.no_extension_filter = True
+        if args.phase2_max_brute_bytes <= 4:
+            args.phase2_max_brute_bytes = 5
 
     source = Path(args.source).resolve()
     output = Path(args.output).resolve()
@@ -280,6 +515,26 @@ def main():
         print(f"ERROR: source not a directory: {source}")
         sys.exit(2)
     output.mkdir(parents=True, exist_ok=True)
+    manifest = Manifest(output)
+    run_started = time.time()
+    report = {
+        "tool": "lockbit-rescue",
+        "generated_at": utc_now_iso(),
+        "source": str(source),
+        "output": str(output),
+        "args": vars(args),
+        "scan": {},
+        "plan": {},
+        "phase1": {"groups": []},
+        "phase2": {"enabled": False, "totals": {}, "batches": []},
+    }
+
+    def flush_report():
+        if not args.report_json:
+            return
+        report["duration_sec"] = round(time.time() - run_started, 3)
+        report["generated_at"] = utc_now_iso()
+        write_json_report(Path(args.report_json), report)
 
     # Locate stream-reuse
     here = Path(__file__).resolve().parent
@@ -314,6 +569,37 @@ def main():
     common_exts = DEFAULT_COMMON_EXTS
     if args.no_extension_filter:
         print("[i] Extension filter disabled — attempting ALL file types")
+    if args.restore_tree:
+        print("[i] Output mode: restore source tree within each group directory")
+    if args.predict_names:
+        print("[i] Name prediction enabled for extensionless decrypted files")
+    if args.aggressive:
+        print("[i] Aggressive mode enabled: wider candidate set and deeper Phase 2 attempts")
+
+    # Locate phase2 binaries now so auto handoff is ready after phase1.
+    brute_bin = None
+    direct_bin = None
+    phase2_candidates_brute = []
+    phase2_candidates_direct = []
+    if args.brute_extend:
+        phase2_candidates_brute.append(Path(args.brute_extend))
+    if args.direct_decrypt:
+        phase2_candidates_direct.append(Path(args.direct_decrypt))
+    phase2_candidates_brute += [
+        here / "brute-extend",
+        here.parent / "lockbit-v3-linux-decryptor" / "brute-extend",
+        Path("/usr/local/bin/brute-extend"),
+    ]
+    phase2_candidates_direct += [
+        here / "direct-decrypt",
+        here.parent / "lockbit-v3-linux-decryptor" / "direct-decrypt",
+        Path("/usr/local/bin/direct-decrypt"),
+    ]
+    brute_bin = next((c for c in phase2_candidates_brute if c.is_file() and os.access(c, os.X_OK)), None)
+    direct_bin = next((c for c in phase2_candidates_direct if c.is_file() and os.access(c, os.X_OK)), None)
+    if not args.no_phase2 and (not brute_bin or not direct_bin):
+        print("[!] Phase 2 auto-run disabled: brute-extend/direct-decrypt binaries not found")
+        args.no_phase2 = True
 
     # Scratch dir (per-job to avoid collisions when running multiple instances)
     scratch = Path(args.scratch) if args.scratch else (output / ".scratch")
@@ -326,19 +612,53 @@ def main():
         source, args.ext, common_exts, args.no_extension_filter,
         args.min_size, args.max_size,
     )
+    report["scan"] = {
+        "scanned": scanned,
+        "matched": matched,
+        "groups": len(groups),
+        "skipped_too_big": skipped_big,
+    }
     print(f"[+] Scanned {scanned} encrypted files in {time.time()-t0:.1f}s")
     print(f"    match={matched}, groups={len(groups)}, skipped_too_big={skipped_big}")
 
     # --- Plan ---
-    plans = build_plan(groups, args.ext)
+    plans = build_plan(groups, args.ext, use_all_extensions=args.no_extension_filter)
+    fallback_keks = set()
+    if not args.no_extension_filter:
+        planned_keks = {p[1] for p in plans}
+        orphan_keks = set(groups.keys()) - planned_keks
+        if orphan_keks:
+            print(f"[*] Re-scanning {len(orphan_keks)} orphan batches without extension filter...")
+            fallback_plans = build_plan(groups, args.ext, use_all_extensions=True, only_keks=orphan_keks)
+            if fallback_plans:
+                plans.extend(fallback_plans)
+                plans.sort(key=lambda x: -x[0])
+                fallback_keks = {p[1] for p in fallback_plans}
+                print(f"[+] Added {len(fallback_plans)} batch(es) through no-extension fallback")
     total_targets = sum(p[0] for p in plans)
     no_oracle = len(groups) - len(plans)
     print(f"[+] Plan: {len(plans)} decryptable groups / {len(groups)} total")
     print(f"    ({no_oracle} groups skipped — no oracle file with long enough filename)")
     print(f"    targets to attempt: {total_targets}")
     print(f"    output: {output}")
+    report["plan"] = {
+        "decryptable_groups": len(plans),
+        "total_groups": len(groups),
+        "groups_without_oracle": no_oracle,
+        "targets_to_attempt": total_targets,
+        "fallback_groups": sorted(fallback_keks),
+    }
+    if args.plan_only:
+        if total_targets == 0:
+            print("[!] Nothing to decrypt. Probably no group has a long-named oracle.")
+        print("[*] Plan-only mode: no decryption performed.")
+        report["phase1"]["status"] = "plan_only"
+        flush_report()
+        return
     if total_targets == 0:
         print("[!] Nothing to decrypt. Probably no group has a long-named oracle.")
+        report["phase1"]["status"] = "no_targets"
+        flush_report()
         return
 
     # --- Resume bookkeeping ---
@@ -346,100 +666,337 @@ def main():
     for _, kek, _, targets in plans:
         gdir = output / f"group_{kek}"
         if gdir.is_dir():
-            for _, tfname, _, _ in targets:
+            for _, tfname, _, _, _ in targets:
                 if (gdir / tfname[: -len(args.ext)]).exists():
                     already += 1
     if already:
         print(f"[i] Resume: {already} files already in output, will skip")
+    report["plan"]["already_present"] = already
 
-    total_ok = total_fail = 0
+    total_ok = total_fail = total_review = 0
     remaining = total_targets - already
     overall = tqdm(total=remaining, desc="Overall", unit="file", mininterval=0.5, position=0)
 
     # --- Per-group decryption ---
-    for gi, (n_targets, kek, oracle, targets) in enumerate(plans):
-        oracle_fei_len, oracle_fname, oracle_path, oracle_sz = oracle
-        oracle_orig = oracle_fname[: -len(args.ext)]
-        group_out = output / f"group_{kek}"
-        group_out.mkdir(parents=True, exist_ok=True)
+    if int(args.jobs) > 1:
+        print(f"[*] Phase 1 parallel mode: groups={len(plans)} jobs={int(args.jobs)}")
+        futures = {}
+        with concurrent.futures.ProcessPoolExecutor(max_workers=max(1, int(args.jobs))) as pool:
+            for gi, (n_targets, kek, oracle, targets) in enumerate(plans):
+                futures[pool.submit(
+                    _phase1_group_worker,
+                    {
+                        "group_index": gi + 1,
+                        "group_total": len(plans),
+                        "kek": kek,
+                        "oracle": oracle,
+                        "targets": targets,
+                        "args_ext": args.ext,
+                        "output": str(output),
+                        "scratch": str(scratch),
+                        "tool": str(tool),
+                        "timeout": int(args.timeout),
+                        "source_root": str(source),
+                        "restore_tree": bool(args.restore_tree),
+                        "predict_names": bool(args.predict_names),
+                    },
+                )] = kek
 
-        # Skip group if fully done
-        existing = sum(1 for _, tf, _, _ in targets if (group_out / tf[:-len(args.ext)]).exists())
-        if existing == len(targets):
-            print(f"[GROUP {gi+1}/{len(plans)}] {kek} already complete, skip")
-            continue
+            for fut in concurrent.futures.as_completed(futures):
+                kek = futures[fut]
+                try:
+                    stats = fut.result()
+                except Exception:
+                    total_fail += 1
+                    print(f"[GROUP worker] {kek} failed")
+                    continue
+                total_ok += stats.get("ok", 0)
+                total_review += stats.get("review", 0)
+                total_fail += stats.get("fail", 0)
+                overall.update(stats.get("attempted", 0))
+                report["phase1"]["groups"].append(stats)
+                print(
+                    f"[GROUP worker] {kek} ok={stats.get('ok',0)} review={stats.get('review',0)} "
+                    f"fail={stats.get('fail',0)}"
+                )
+    else:
+        for gi, (n_targets, kek, oracle, targets) in enumerate(plans):
+            oracle_fei_len, oracle_fname, oracle_path, oracle_sz, _oracle_ext_ok = oracle
+            oracle_orig = oracle_fname[: -len(args.ext)]
+            group_out = output / f"group_{kek}"
+            group_out.mkdir(parents=True, exist_ok=True)
+            review_dir = group_out / "_needs_review"
+            review_dir.mkdir(exist_ok=True)
 
-        print(f"\n[GROUP {gi+1}/{len(plans)}] {kek}  oracle=\"{oracle_orig[:60]}\" "
-              f"({fmt_size(oracle_sz)})  -> {len(targets)} target(s)")
+            cached = load_keystream(group_out)
+            ks_cached = cached is not None
+            if ks_cached:
+                ks_bytes, ks_meta = cached
+                print(f"   [i] keystream cache loaded: {len(ks_bytes)} byte(s)")
 
-        # Stage oracle locally to avoid re-reading slow source over and over
-        local_oracle = scratch / f"_oracle_{kek}{args.ext}"
-        try:
-            copy_with_progress(Path(oracle_path), local_oracle, f"  copy oracle {fmt_size(oracle_sz)}")
-        except Exception as e:
-            print(f"   [!] oracle copy failed: {e}")
-            overall.update(len(targets))
-            continue
-
-        grp_ok = grp_fail = 0
-        grp_bar = tqdm(targets, desc=f"  {kek}", unit="file", leave=False,
-                       mininterval=0.3, position=1)
-        t_start = time.time()
-        for (fei_len, tfname, tpath, tsz) in grp_bar:
-            torig = tfname[: -len(args.ext)]
-            out_path = group_out / torig
-            short = (torig[:35] + "...") if len(torig) > 35 else torig
-            grp_bar.set_postfix({"cur": short, "sz": fmt_size(tsz),
-                                 "ok": grp_ok, "fail": grp_fail})
-
-            if out_path.exists():
-                grp_ok += 1
-                overall.update(1)
+            # Skip group if fully done
+            existing = sum(1 for _, tf, _, _, _ in targets if (group_out / tf[:-len(args.ext)]).exists())
+            if existing == len(targets):
+                print(f"[GROUP {gi+1}/{len(plans)}] {kek} already complete, skip")
                 continue
 
-            local_target = scratch / f"_target{args.ext}"
+            print(f"\n[GROUP {gi+1}/{len(plans)}] {kek}  oracle=\"{oracle_orig[:60]}\" "
+                f"({fmt_size(oracle_sz)})  -> {len(targets)} target(s)")
+
+            # Stage oracle locally to avoid re-reading slow source over and over
+            local_oracle = scratch / f"_oracle_{kek}{args.ext}"
             try:
-                copy_with_progress(Path(tpath), local_target, f"    fetch {short}")
-            except Exception:
-                grp_fail += 1
-                overall.update(1)
+                copy_with_progress(Path(oracle_path), local_oracle, f"  copy oracle {fmt_size(oracle_sz)}")
+            except Exception as e:
+                print(f"   [!] oracle copy failed: {e}")
+                overall.update(len(targets))
                 continue
 
-            decrypted = decrypt_target(tool, local_target, local_oracle,
-                                       oracle_orig, scratch, args.timeout)
-            if decrypted is None:
-                grp_fail += 1
-            else:
-                ftype = libmagic(decrypted)
-                if is_bad_decrypt(ftype):
+            grp_ok = grp_fail = grp_review = 0
+            grp_bar = tqdm(targets, desc=f"  {kek}", unit="file", leave=False,
+                           mininterval=0.3, position=1)
+            t_start = time.time()
+            for (fei_len, tfname, tpath, tsz, _ext_ok) in grp_bar:
+                torig = tfname[: -len(args.ext)]
+                rel_out = compute_output_relative(tpath, source if args.restore_tree else None, args.ext, torig)
+                out_path = group_out / rel_out
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                short = (torig[:35] + "...") if len(torig) > 35 else torig
+                grp_bar.set_postfix({"cur": short, "sz": fmt_size(tsz),
+                                     "ok": grp_ok, "review": grp_review, "fail": grp_fail})
+
+                if out_path.exists():
+                    grp_ok += 1
+                    overall.update(1)
+                    continue
+
+                local_target = scratch / f"_target{args.ext}"
+                try:
+                    copy_with_progress(Path(tpath), local_target, f"    fetch {short}")
+                except Exception:
                     grp_fail += 1
-                    try: decrypted.unlink()
-                    except: pass
+                    overall.update(1)
+                    continue
+
+                decrypted = decrypt_target(tool, local_target, local_oracle,
+                                           oracle_orig, scratch, args.timeout)
+                if decrypted is None:
+                    grp_fail += 1
+                    manifest.add(
+                    kek,
+                    torig,
+                    original_extension(torig),
+                    tpath,
+                    "",
+                    "FAIL",
+                    "",
+                    tsz,
+                    fei_len,
+                )
                 else:
-                    try:
-                        copy_with_progress(decrypted, out_path, f"    save {short}")
-                        decrypted.unlink()
-                        grp_ok += 1
-                    except Exception:
-                        grp_fail += 1
-                        try: decrypted.unlink()
-                        except: pass
+                    ftype = libmagic(decrypted)
+                    if is_bad_decrypt(ftype):
+                        review_path = review_dir / rel_out
+                        review_path.parent.mkdir(parents=True, exist_ok=True)
+                        try:
+                            copy_with_progress(decrypted, review_path, f"    review {short}")
+                            grp_review += 1
+                            manifest.add(
+                            kek,
+                            torig,
+                            original_extension(torig),
+                            tpath,
+                            str(review_path),
+                            "REVIEW",
+                            ftype,
+                            tsz,
+                            fei_len,
+                        )
+                        except Exception:
+                            grp_fail += 1
+                            manifest.add(
+                            kek,
+                            torig,
+                            original_extension(torig),
+                            tpath,
+                            "",
+                            "FAIL",
+                            ftype,
+                            tsz,
+                            fei_len,
+                        )
+                        try:
+                            decrypted.unlink()
+                        except Exception:
+                            pass
+                    else:
+                        try:
+                            final_out = maybe_predict_name(out_path, ftype, args.predict_names)
+                            copy_with_progress(decrypted, out_path, f"    save {short}")
+                            if final_out != out_path:
+                                final_out.parent.mkdir(parents=True, exist_ok=True)
+                                out_path.rename(final_out)
+                            out_path = final_out
+                            grp_ok += 1
+                            manifest.add(
+                            kek,
+                            torig,
+                            original_extension(torig),
+                            tpath,
+                            str(out_path),
+                            "OK",
+                            ftype,
+                            tsz,
+                            fei_len,
+                        )
+                            if not ks_cached:
+                                try:
+                                    ks_bytes, ks_meta = extract_keystream(Path(oracle_path), oracle_orig)
+                                    save_keystream(
+                                    group_out,
+                                    ks_bytes,
+                                    {
+                                        "oracle_name": oracle_orig,
+                                        "oracle_path": str(oracle_path),
+                                        "oracle_fei_len": oracle_fei_len,
+                                        "ransom_ext": args.ext,
+                                        "known_len": ks_meta.get("known_len"),
+                                        "source": "phase1_oracle_extract",
+                                    },
+                                )
+                                    ks_cached = True
+                                    print(f"   [i] keystream cache saved for group {kek} ({len(ks_bytes)} byte(s))")
+                                except Exception as e:
+                                    print(f"   [!] keystream cache extraction failed for group {kek}: {e}")
+                            try:
+                                decrypted.unlink()
+                            except Exception:
+                                pass
+                        except Exception:
+                            grp_fail += 1
+                            manifest.add(
+                            kek,
+                            torig,
+                            original_extension(torig),
+                            tpath,
+                            "",
+                            "FAIL",
+                            ftype,
+                            tsz,
+                            fei_len,
+                        )
+                            try:
+                                decrypted.unlink()
+                            except Exception:
+                                pass
 
-            try: local_target.unlink()
-            except: pass
-            overall.update(1)
+                try:
+                    local_target.unlink()
+                except Exception:
+                    pass
+                overall.update(1)
 
-        grp_bar.close()
-        print(f"   GROUP DONE {kek}: {grp_ok} ok / {grp_fail} fail in {time.time()-t_start:.0f}s")
-        total_ok += grp_ok
-        total_fail += grp_fail
-        try: local_oracle.unlink()
-        except: pass
+            grp_bar.close()
+            print(
+                f"   GROUP DONE {kek}: {grp_ok} ok / {grp_review} review / {grp_fail} fail "
+                f"in {time.time()-t_start:.0f}s"
+            )
+            report["phase1"]["groups"].append({
+                "kek": kek,
+                "ok": grp_ok,
+                "review": grp_review,
+                "fail": grp_fail,
+                "attempted": len(targets),
+                "targets": len(targets),
+                "duration_sec": round(time.time() - t_start, 3),
+            })
+            total_ok += grp_ok
+            total_review += grp_review
+            total_fail += grp_fail
+            try:
+                local_oracle.unlink()
+            except Exception:
+                pass
 
     overall.close()
-    print(f"\n[*] FINISHED. Recovered: {total_ok}  |  Failed: {total_fail}")
+    print(f"\n[*] FINISHED. Recovered: {total_ok}  |  Review: {total_review}  |  Failed: {total_fail}")
     print(f"[*] Output: {output}")
+    print(f"[*] Manifest: {output / 'manifest.csv'}")
+    report["phase1"].update({
+        "status": "completed",
+        "ok": total_ok,
+        "review": total_review,
+        "fail": total_fail,
+        "remaining_after_resume": remaining,
+    })
+
+    if not args.no_phase2 and brute_bin and direct_bin:
+        report["phase2"]["enabled"] = True
+        phase2_batches = []
+        for kek, members in groups.items():
+            use_all = args.no_extension_filter or (kek in fallback_keks)
+            candidates = list(members) if use_all else [m for m in members if m[4]]
+            if len(candidates) < 2:
+                continue
+            oracle = max(candidates, key=lambda x: x[0])
+            coverage = (oracle[0] - COVERAGE_BASE_FROM_FEI) + COVERAGE_OFFSET
+            has_leftovers = any(m[0] > coverage for m in candidates if m != oracle)
+            if not has_leftovers:
+                continue
+            phase2_batches.append((kek, [(m[0], m[1], m[2], m[3]) for m in candidates]))
+
+        if phase2_batches:
+            print(f"\n[*] Auto Phase 2: {len(phase2_batches)} batch(es) with uncovered targets")
+            phase2_totals = run_phase2_batches(
+                phase2_batches,
+                output,
+                scratch,
+                brute_bin,
+                direct_bin,
+                args.ext,
+                args.phase2_max_brute_bytes,
+                args.phase2_before_chunk,
+                args.phase2_after_chunk,
+                args.phase2_skipped_hex,
+                args.phase2_brute_timeout,
+                args.phase2_brute_retry_timeout,
+                manifest,
+                jobs=max(1, int(args.phase2_jobs)),
+                brute_threads=max(1, int(args.phase2_brute_threads)),
+                enable_fusion=(not args.phase2_no_fusion),
+                source_root=source if args.restore_tree else None,
+                restore_tree=bool(args.restore_tree),
+                predict_names=bool(args.predict_names),
+                aggressive=bool(args.aggressive),
+                min_oracle_fei_len=(0 if args.aggressive else 90),
+            )
+            print(
+                f"[*] Phase 2 totals: recovered={phase2_totals['ok']} review={phase2_totals['review']} "
+                f"failed={phase2_totals['fail']} frozen={phase2_totals['frozen']}"
+            )
+            report["phase2"]["totals"] = {
+                "ok": phase2_totals.get("ok", 0),
+                "review": phase2_totals.get("review", 0),
+                "fail": phase2_totals.get("fail", 0),
+                "skipped": phase2_totals.get("skipped", 0),
+                "frozen": phase2_totals.get("frozen", 0),
+            }
+            report["phase2"]["batches"] = phase2_totals.get("batches", [])
+        else:
+            print("[*] Auto Phase 2: no uncovered targets detected")
+            report["phase2"]["totals"] = {
+                "ok": 0,
+                "review": 0,
+                "fail": 0,
+                "skipped": 0,
+                "frozen": 0,
+            }
+            report["phase2"]["batches"] = []
+    else:
+        report["phase2"]["enabled"] = False
+
     print(f"[i] Tip: verify integrity with verify-recovered.py {output}")
+    flush_report()
 
 
 if __name__ == "__main__":

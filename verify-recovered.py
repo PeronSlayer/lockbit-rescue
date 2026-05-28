@@ -9,6 +9,8 @@ the result as:
   - GOOD     : libmagic recognized a sane file type matching its extension
   - MISMATCH : recognized a sane type but disagreeing with the extension
               (usually means the original file was user-renamed before encryption)
+    - UNKNOWN_FORMAT : file is under _needs_review and libmagic says generic data,
+                            but extension is in a known set of niche/custom formats
   - SUSPECT  : libmagic returned raw "data", "empty", or "corrupted"
               (this is the signal of a botched decryption)
 
@@ -77,13 +79,21 @@ FAMILY_EXT = {
     "Mobipocket":      {"mobi", "azw3"},
 }
 
+UNKNOWN_FORMAT_EXTS = {
+    "db", "sqlite", "sqlite3", "cfg", "conf", "config", "cnf", "ini",
+    "dat", "bin", "bak", "log", "sql", "properties", "yaml", "yml",
+    "toml", "env", "ldb", "edb",
+}
 
-def classify(ftype: str, ext: str):
+
+def classify(ftype: str, ext: str, path: str = ""):
     f = (ftype or "").strip()
     if not f or f.lower() == "empty":
         return "SUSPECT", "empty"
     fl = f.lower()
     if fl == "data" or fl.startswith("data,") or "corrupted" in fl:
+        if "/_needs_review/" in path.replace("\\", "/") and ext in UNKNOWN_FORMAT_EXTS:
+            return "UNKNOWN_FORMAT", f"needs_review .{ext}"
         return "SUSPECT", f
     # libmagic output reliably starts with the format name. Anchor the match
     # at the beginning so that, e.g., 'SQLite ... UTF-8 ...' isn't wrongly
@@ -133,7 +143,7 @@ def main():
     results = collections.Counter()
     by_ext = collections.defaultdict(collections.Counter)
     by_root = collections.defaultdict(collections.Counter)
-    suspect_samples, mismatch_samples = [], []
+    suspect_samples, mismatch_samples, unknown_samples = [], [], []
 
     BATCH = 200
     for i in tqdm(range(0, len(all_files), BATCH), unit="batch"):
@@ -155,7 +165,7 @@ def main():
                 except Exception:
                     ft = "data"
                 ext = p.rsplit(".", 1)[-1].lower() if "." in os.path.basename(p) else ""
-                cls, _ = classify(ft, ext)
+                cls, _ = classify(ft, ext, p)
                 results[cls] += 1
                 by_ext[ext][cls] += 1
                 rt = root_for(p, roots)
@@ -163,13 +173,15 @@ def main():
                     by_root[str(rt)][cls] += 1
                 if cls == "SUSPECT" and len(suspect_samples) < args.max_suspect_samples:
                     suspect_samples.append((p, ft))
+                if cls == "UNKNOWN_FORMAT" and len(unknown_samples) < args.max_suspect_samples:
+                    unknown_samples.append((p, ft))
                 if cls == "MISMATCH" and len(mismatch_samples) < args.max_mismatch_samples:
                     mismatch_samples.append((p, ft))
             continue
 
         for p, ft in zip(batch, out):
             ext = p.rsplit(".", 1)[-1].lower() if "." in os.path.basename(p) else ""
-            cls, _ = classify(ft, ext)
+            cls, _ = classify(ft, ext, p)
             results[cls] += 1
             by_ext[ext][cls] += 1
             rt = root_for(p, roots)
@@ -177,6 +189,8 @@ def main():
                 by_root[str(rt)][cls] += 1
             if cls == "SUSPECT" and len(suspect_samples) < args.max_suspect_samples:
                 suspect_samples.append((p, ft))
+            if cls == "UNKNOWN_FORMAT" and len(unknown_samples) < args.max_suspect_samples:
+                unknown_samples.append((p, ft))
             if cls == "MISMATCH" and len(mismatch_samples) < args.max_mismatch_samples:
                 mismatch_samples.append((p, ft))
 
@@ -184,7 +198,7 @@ def main():
     print()
     print("============ INTEGRITY REPORT ============")
     print(f"Total recovered files scanned: {total}")
-    for cls in ("GOOD", "MISMATCH", "SUSPECT"):
+    for cls in ("GOOD", "MISMATCH", "UNKNOWN_FORMAT", "SUSPECT"):
         c = results.get(cls, 0)
         pct = (c * 100.0 / total) if total else 0
         print(f"  {cls:9s}: {c:6d}   ({pct:5.1f}%)")
@@ -193,18 +207,23 @@ def main():
     for root, cnt in by_root.items():
         tot_r = sum(cnt.values())
         print(f"  {root}: {tot_r} files")
-        for cls in ("GOOD", "MISMATCH", "SUSPECT"):
+        for cls in ("GOOD", "MISMATCH", "UNKNOWN_FORMAT", "SUSPECT"):
             c = cnt.get(cls, 0)
             pct = (c * 100.0 / tot_r) if tot_r else 0
             print(f"      {cls:9s}: {c:6d}  ({pct:5.1f}%)")
 
     print("\n--- Per-extension breakdown (top 25) ---")
     ext_totals = sorted(by_ext.items(), key=lambda x: -sum(x[1].values()))[:25]
-    print(f'  {"ext":10s} {"total":>8s} {"good":>8s} {"mismatch":>10s} {"suspect":>10s}')
+    print(f'  {"ext":10s} {"total":>8s} {"good":>8s} {"mismatch":>10s} {"unknown":>10s} {"suspect":>10s}')
     for ext, cnt in ext_totals:
         tot = sum(cnt.values())
         print(f"  {ext:10s} {tot:8d} {cnt.get('GOOD',0):8d} "
-              f"{cnt.get('MISMATCH',0):10d} {cnt.get('SUSPECT',0):10d}")
+              f"{cnt.get('MISMATCH',0):10d} {cnt.get('UNKNOWN_FORMAT',0):10d} {cnt.get('SUSPECT',0):10d}")
+
+    if unknown_samples:
+        print(f"\n--- Unknown-format samples (up to {args.max_suspect_samples}) ---")
+        for p, ft in unknown_samples:
+            print(f"  [{ft[:55]:55s}] {p}")
 
     if suspect_samples:
         print(f"\n--- Suspect samples (up to {args.max_suspect_samples}) ---")

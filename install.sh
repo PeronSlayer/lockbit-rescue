@@ -49,7 +49,13 @@ else
 fi
 
 echo "[*] Building stream-reuse"
-make -C "${UPSTREAM_DIR}" stream-reuse
+if ! make -C "${UPSTREAM_DIR}"; then
+    echo "[!] Upstream 32-bit static build failed; trying native fallback build"
+    gcc -o "${UPSTREAM_DIR}/frank" "${UPSTREAM_DIR}/frank.c" \
+        -O2 -D_FILE_OFFSET_BITS=64
+    gcc -o "${UPSTREAM_DIR}/stream-reuse" "${UPSTREAM_DIR}/stream-reuse.c" \
+        "${UPSTREAM_DIR}/aplib.a" -O2 -D_FILE_OFFSET_BITS=64
+fi
 
 # 3b) Build brute_extend2 (pure-C, segfault-free) and direct_decrypt.
 # These are our additions on top of upstream; copy our source into the
@@ -63,15 +69,23 @@ fi
 
 if [ -f "${UPSTREAM_DIR}/brute_extend2.c" ]; then
     echo "[*] Building brute_extend2 (pure-C keystream brute force)"
-    gcc -o "${UPSTREAM_DIR}/brute_extend2" "${UPSTREAM_DIR}/brute_extend2.c" \
-        "${UPSTREAM_DIR}/aplib.a" -m32 -fno-stack-protector -O2 -D_FILE_OFFSET_BITS=64
+    if ! gcc -o "${UPSTREAM_DIR}/brute_extend2" "${UPSTREAM_DIR}/brute_extend2.c" \
+        "${UPSTREAM_DIR}/aplib.a" -m32 -fno-stack-protector -O2 -D_FILE_OFFSET_BITS=64 -lpthread; then
+        echo "[!] 32-bit brute_extend2 build failed; trying native fallback build"
+        gcc -o "${UPSTREAM_DIR}/brute_extend2" "${UPSTREAM_DIR}/brute_extend2.c" \
+            "${UPSTREAM_DIR}/aplib.a" -O2 -D_FILE_OFFSET_BITS=64 -lpthread
+    fi
 fi
 
 if [ -f "${UPSTREAM_DIR}/direct_decrypt.c" ]; then
     echo "[*] Building direct_decrypt (body decrypt from recovered key)"
-    gcc -o "${UPSTREAM_DIR}/direct_decrypt" "${UPSTREAM_DIR}/direct_decrypt.c" \
+    if ! gcc -o "${UPSTREAM_DIR}/direct_decrypt" "${UPSTREAM_DIR}/direct_decrypt.c" \
         -m32 -z execstack -fno-stack-protector -no-pie -Wl,-z,norelro -static \
-        -O0 -D_FILE_OFFSET_BITS=64
+        -O0 -D_FILE_OFFSET_BITS=64; then
+        echo "[!] 32-bit direct_decrypt build failed; trying native fallback build"
+        gcc -o "${UPSTREAM_DIR}/direct_decrypt" "${UPSTREAM_DIR}/direct_decrypt.c" \
+            -O2 -D_FILE_OFFSET_BITS=64
+    fi
 fi
 
 # 4) Symlink so the rescue tools find them next to themselves
