@@ -1,0 +1,9 @@
+[tool.ruff]
+line-length = 120
+target-version = "py38"
+exclude = [
+  "_stream-reuse",
+]
+
+[tool.ruff.lint]
+select = ["F"]

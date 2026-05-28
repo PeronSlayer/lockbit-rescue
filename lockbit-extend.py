@@ -10,6 +10,7 @@ from pathlib import Path
 from manifest import Manifest
 from phase2 import detect_extension, run_phase2_batches, scan_batches
 from report_utils import utc_now_iso, write_html_report, write_json_report
+from runtime_profiles import VALID_PROFILES, resolve_phase2_profile
 
 
 def main():
@@ -37,10 +38,12 @@ def main():
                     help="Per-file brute-force timeout in seconds (default: 900)")
     ap.add_argument("--brute-retry-timeout", type=int, default=1800,
                     help="Retry timeout for timed-out brute steps (default: 1800)")
-    ap.add_argument("--jobs", type=int, default=max(1, min(4, (os.cpu_count() or 1))),
-                    help="Parallel Phase 2 batches (default: min(4, cpu_count))")
-    ap.add_argument("--brute-threads", type=int, default=max(1, (os.cpu_count() or 1)),
-                    help="Threads per brute-extend invocation (default: cpu_count)")
+    ap.add_argument("--profile", choices=VALID_PROFILES, default="balanced",
+                    help="Runtime profile for CPU/I/O usage (default: balanced)")
+    ap.add_argument("--jobs", type=int, default=None,
+                    help="Parallel Phase 2 batches (default: profile-dependent)")
+    ap.add_argument("--brute-threads", type=int, default=None,
+                    help="Threads per brute-extend invocation (default: profile-dependent)")
     ap.add_argument("--no-fusion", action="store_true",
                     help="Disable multi-oracle keystream fusion")
     ap.add_argument("--restore-tree", action="store_true",
@@ -62,6 +65,10 @@ def main():
     if args.aggressive and args.max_brute_bytes <= 4:
         args.max_brute_bytes = 5
 
+    resolved_profile = resolve_phase2_profile(args.profile, args.jobs, args.brute_threads)
+    args.jobs = resolved_profile["jobs"]
+    args.brute_threads = resolved_profile["brute_threads"]
+
     source = Path(args.source).resolve()
     output = Path(args.output).resolve()
     if not source.is_dir():
@@ -77,6 +84,7 @@ def main():
         "source": str(source),
         "output": str(output),
         "args": vars(args),
+        "runtime_profile": resolved_profile,
         "scan": {},
         "plan": {},
         "phase2": {"enabled": True, "totals": {}, "batches": []},
@@ -117,6 +125,11 @@ def main():
 
     scratch = Path(args.scratch) if args.scratch else (output / ".extend_scratch")
     scratch.mkdir(parents=True, exist_ok=True)
+
+    print(
+        f"[i] Runtime profile: {args.profile} "
+        f"(jobs={args.jobs}, brute_threads={args.brute_threads})"
+    )
 
     print(f"[*] Scanning {source}...")
     t0 = time.time()

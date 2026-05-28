@@ -54,6 +54,7 @@ from manifest import Manifest
 from output_layout import collision_safe_path, compute_output_relative, maybe_predict_name
 from phase2 import run_phase2_batches
 from report_utils import utc_now_iso, write_html_report, write_json_report
+from runtime_profiles import VALID_PROFILES, resolve_recovery_profile
 
 try:
     from tqdm import tqdm
@@ -197,7 +198,7 @@ def scan(source: Path, ransom_ext: str, common_exts, no_extension_filter: bool,
          min_size: int, max_size: int):
     """Walk source, group encrypted files by KEK fingerprint."""
     groups = collections.defaultdict(list)
-    scanned = matched = skipped_size = 0
+    scanned = matched = skipped_too_small = skipped_too_big = skipped_extension = 0
     bar = tqdm(desc="Scanning", unit="file", mininterval=0.5)
     for dirpath, _, files in os.walk(source):
         for fname in files:
@@ -211,21 +212,24 @@ def scan(source: Path, ransom_ext: str, common_exts, no_extension_filter: bool,
             except OSError:
                 continue
             if sz < min_size:
+                skipped_too_small += 1
                 continue
             if sz > max_size:
-                skipped_size += 1
+                skipped_too_big += 1
                 continue
             ext_ok = is_target(fname, ransom_ext, common_exts, no_extension_filter)
             if ext_ok:
                 matched += 1
+            else:
+                skipped_extension += 1
             try:
                 fei_len, kek_blob = read_footer(fpath)
             except (OSError, struct.error):
                 continue
             groups[kek_fingerprint(kek_blob)].append((fei_len, fname, str(fpath), sz, ext_ok))
-            bar.set_postfix({"match": matched, "grp": len(groups), "skipped_big": skipped_size})
+            bar.set_postfix({"match": matched, "grp": len(groups), "small": skipped_too_small, "big": skipped_too_big})
     bar.close()
-    return groups, scanned, matched, skipped_size
+    return groups, scanned, matched, skipped_too_small, skipped_too_big, skipped_extension
 
 
 def build_plan(groups, ransom_ext: str, use_all_extensions: bool = False, only_keks=None):
@@ -512,8 +516,10 @@ def main():
                     help="Scratch directory for per-job temp files (default: <output>/.scratch)")
     ap.add_argument("--timeout", type=int, default=600,
                     help="Per-file decryption timeout in seconds (default: 600)")
-    ap.add_argument("--jobs", type=int, default=max(1, min(4, (os.cpu_count() or 1))),
-                    help="Parallel groups for Phase 1 (default: min(4, cpu_count))")
+    ap.add_argument("--profile", choices=VALID_PROFILES, default="balanced",
+                    help="Runtime profile for CPU/I/O usage (default: balanced)")
+    ap.add_argument("--jobs", type=int, default=None,
+                    help="Parallel groups for Phase 1 (default: profile-dependent)")
     ap.add_argument("--no-phase2", action="store_true",
                     help="Disable automatic Phase 2 (keystream extension) pass")
     ap.add_argument("--phase2-max-brute-bytes", type=int, default=4,
@@ -528,10 +534,10 @@ def main():
                     help="Phase 2: brute timeout seconds (default: 900)")
     ap.add_argument("--phase2-brute-retry-timeout", type=int, default=1800,
                     help="Phase 2: retry timeout seconds after timeout (default: 1800)")
-    ap.add_argument("--phase2-jobs", type=int, default=max(1, min(4, (os.cpu_count() or 1))),
-                    help="Phase 2: parallel batches (default: min(4, cpu_count))")
-    ap.add_argument("--phase2-brute-threads", type=int, default=max(1, (os.cpu_count() or 1)),
-                    help="Phase 2: threads per brute-extend process (default: cpu_count)")
+    ap.add_argument("--phase2-jobs", type=int, default=None,
+                    help="Phase 2: parallel batches (default: profile-dependent)")
+    ap.add_argument("--phase2-brute-threads", type=int, default=None,
+                    help="Phase 2: threads per brute-extend process (default: profile-dependent)")
     ap.add_argument("--phase2-no-fusion", action="store_true",
                     help="Phase 2: disable multi-oracle keystream fusion")
     ap.add_argument("--report-json", default=None,
@@ -551,6 +557,16 @@ def main():
         if args.phase2_max_brute_bytes <= 4:
             args.phase2_max_brute_bytes = 5
 
+    resolved_profile = resolve_recovery_profile(
+        args.profile,
+        args.jobs,
+        args.phase2_jobs,
+        args.phase2_brute_threads,
+    )
+    args.jobs = resolved_profile["jobs"]
+    args.phase2_jobs = resolved_profile["phase2_jobs"]
+    args.phase2_brute_threads = resolved_profile["phase2_brute_threads"]
+
     source = Path(args.source).resolve()
     output = Path(args.output).resolve()
     if not source.is_dir():
@@ -565,6 +581,7 @@ def main():
         "source": str(source),
         "output": str(output),
         "args": vars(args),
+        "runtime_profile": resolved_profile,
         "scan": {},
         "plan": {},
         "phase1": {"groups": []},
@@ -623,6 +640,11 @@ def main():
         print("[i] Name prediction enabled for extensionless decrypted files")
     if args.aggressive:
         print("[i] Aggressive mode enabled: wider candidate set and deeper Phase 2 attempts")
+    print(
+        f"[i] Runtime profile: {args.profile} "
+        f"(phase1_jobs={args.jobs}, phase2_jobs={args.phase2_jobs}, "
+        f"brute_threads={args.phase2_brute_threads})"
+    )
 
     # Locate phase2 binaries now so auto handoff is ready after phase1.
     brute_bin = None
@@ -656,7 +678,7 @@ def main():
     # --- Scan ---
     print(f"[*] Scanning {source} ...")
     t0 = time.time()
-    groups, scanned, matched, skipped_big = scan(
+    groups, scanned, matched, skipped_small, skipped_big, skipped_extension = scan(
         source, args.ext, common_exts, args.no_extension_filter,
         args.min_size, args.max_size,
     )
@@ -664,10 +686,15 @@ def main():
         "scanned": scanned,
         "matched": matched,
         "groups": len(groups),
+        "skipped_too_small": skipped_small,
         "skipped_too_big": skipped_big,
+        "skipped_extension_filter": skipped_extension,
     }
     print(f"[+] Scanned {scanned} encrypted files in {time.time()-t0:.1f}s")
-    print(f"    match={matched}, groups={len(groups)}, skipped_too_big={skipped_big}")
+    print(
+        f"    match={matched}, groups={len(groups)}, skipped_too_small={skipped_small}, "
+        f"skipped_too_big={skipped_big}, skipped_extension_filter={skipped_extension}"
+    )
 
     # --- Plan ---
     plans = build_plan(groups, args.ext, use_all_extensions=args.no_extension_filter)

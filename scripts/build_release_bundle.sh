@@ -30,13 +30,18 @@ python3 -m py_compile \
   keystream_cache.py \
   phase2.py \
   output_layout.py \
-  report_utils.py
+  report_utils.py \
+  runtime_profiles.py \
+  lockbit_rescue_bench.py \
+  scripts/benchmark_scan.py
 
 # Package distribution files.
 cp -f LICENSE README.md README-WINDOWS.txt CHANGELOG.md requirements.txt install.sh "${BUNDLE_DIR}/"
 cp -f lockbit-rescue.py lockbit-extend.py verify-recovered.py "${BUNDLE_DIR}/"
 cp -f lockbit-wizard.py lockbit-wizard.cmd "${BUNDLE_DIR}/"
 cp -f manifest.py keystream_cache.py phase2.py output_layout.py report_utils.py "${BUNDLE_DIR}/"
+cp -f runtime_profiles.py lockbit_rescue_bench.py "${BUNDLE_DIR}/"
+cp -f scripts/benchmark_scan.py "${BUNDLE_DIR}/"
 cp -f brute-extend direct-decrypt stream-reuse "${BUNDLE_DIR}/"
 cp -rf docs src "${BUNDLE_DIR}/"
 
