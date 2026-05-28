@@ -175,7 +175,7 @@ jobs:
             - Workflow: `${{ github.workflow }}`
             - Run number: `${{ github.run_number }}`
             - Trigger: push to `main`
-          prerelease: true
+          prerelease: false
           fail_on_unmatched_files: true
           files: |
             release-assets/**/*.tar.gz
