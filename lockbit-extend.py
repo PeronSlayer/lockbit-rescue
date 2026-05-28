@@ -104,14 +104,6 @@ def main():
         return None
 
     here = Path(__file__).resolve().parent
-    brute_bin = Path(args.brute_extend) if args.brute_extend else (here / "brute-extend")
-    direct_bin = Path(args.direct_decrypt) if args.direct_decrypt else (here / "direct-decrypt")
-    if not brute_bin.exists() or not os.access(brute_bin, os.X_OK):
-        print(f"ERROR: brute-extend binary not found at {brute_bin}")
-        sys.exit(3)
-    if not direct_bin.exists() or not os.access(direct_bin, os.X_OK):
-        print(f"ERROR: direct-decrypt binary not found at {direct_bin}")
-        sys.exit(3)
 
     ransom_ext = args.ext or ""
     if not ransom_ext:
@@ -158,6 +150,15 @@ def main():
         flush_report()
         flush_manifest_json()
         return
+
+    brute_bin = Path(args.brute_extend) if args.brute_extend else (here / "brute-extend")
+    direct_bin = Path(args.direct_decrypt) if args.direct_decrypt else (here / "direct-decrypt")
+    if not brute_bin.exists() or not os.access(brute_bin, os.X_OK):
+        print(f"ERROR: brute-extend binary not found at {brute_bin}")
+        sys.exit(3)
+    if not direct_bin.exists() or not os.access(direct_bin, os.X_OK):
+        print(f"ERROR: direct-decrypt binary not found at {direct_bin}")
+        sys.exit(3)
 
     totals = run_phase2_batches(
         work_batches,
