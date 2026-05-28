@@ -10,7 +10,6 @@ import os
 import shutil
 import struct
 import subprocess
-import time
 from pathlib import Path
 
 from keystream_cache import (
