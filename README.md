@@ -121,7 +121,10 @@ The repository includes a release pipeline that runs on every push to `main`:
 - Workflow: `.github/workflows/release-on-push.yml`
 - Behavior: build Linux bundle + build Windows wizard executable + publish GitHub prerelease
 - Release assets: Linux `.tar.gz`, Windows `.zip`, and standalone `lockbit-wizard.exe`
-- Tag format: `auto-<run_number>-<full_sha>`
+- Tag format: `auto-<run_number>-<short_sha>`
+- Guardrails: release job fails if one of `.tar.gz`/`.zip`/`.exe` is missing
+- Re-run behavior: if a prerelease with the same auto tag already exists, it is replaced
+- Retention: keeps only the latest 10 `auto-*` prereleases (older ones are removed automatically)
 
 Manual local bundle build:
 
