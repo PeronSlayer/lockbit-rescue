@@ -141,6 +141,12 @@ bash scripts/build_release_bundle.sh
 
 This generates `dist/lockbit-rescue-<version>.tar.gz` with scripts, docs, and compiled helper binaries.
 
+Developer setup for lint/tests:
+
+```bash
+python3 -m pip install -r requirements-dev.txt
+```
+
 ## Windows CMD wizard (non-expert mode)
 
 For simpler usage on Windows CMD, use the guided wizard:
@@ -178,6 +184,7 @@ python3 lockbit-rescue.py SOURCE_DIR OUTPUT_DIR
 | `--ext .XYZxyzABC` | Force-set the ransomware extension instead of auto-detecting | auto |
 | `--min-size N` | Skip files smaller than N bytes | 10240 (10 KiB) |
 | `--max-size N` | Skip files larger than N bytes | 1073741824 (1 GiB) |
+| `--profile safe\|balanced\|fast` | Runtime profile for CPU/I/O usage | balanced |
 | `--no-extension-filter` | Don't filter by original file type — try EVERYTHING | off |
 | `--restore-tree` | Preserve source subdirectories under each `group_<kek>/` | off |
 | `--predict-names` | Append extension via libmagic for extensionless recovered files | off |
@@ -189,13 +196,13 @@ python3 lockbit-rescue.py SOURCE_DIR OUTPUT_DIR
 | `--stream-reuse PATH` | Path to the `stream-reuse` binary | auto-search |
 | `--scratch PATH` | Scratch dir for temp files | `OUTPUT/.scratch` |
 | `--timeout N` | Per-file decryption timeout (seconds) | 600 |
-| `--jobs N` | Phase 1 parallel groups | min(4, cpu_count) |
+| `--jobs N` | Phase 1 parallel groups | profile-dependent |
 | `--no-phase2` | Disable automatic Phase 2 handoff | off |
 | `--phase2-max-brute-bytes N` | Phase 2 per-file brute gap limit | 4 |
 | `--phase2-brute-timeout N` | Phase 2 brute timeout seconds | 900 |
 | `--phase2-brute-retry-timeout N` | Phase 2 retry timeout seconds | 1800 |
-| `--phase2-jobs N` | Phase 2 parallel batches | min(4, cpu_count) |
-| `--phase2-brute-threads N` | Threads per brute-extend process | cpu_count |
+| `--phase2-jobs N` | Phase 2 parallel batches | profile-dependent |
+| `--phase2-brute-threads N` | Threads per brute-extend process | profile-dependent |
 | `--phase2-no-fusion` | Disable multi-oracle keystream fusion | off |
 | `--brute-extend PATH` | Phase 2 brute binary path | auto-search |
 | `--direct-decrypt PATH` | Phase 2 direct decrypt binary path | auto-search |
@@ -224,6 +231,16 @@ When `--restore-tree` is disabled and different source files share the same base
 Each recovery run writes `manifest.csv` in the output directory. Use `--manifest-json PATH` to also export the same rows as JSON with status totals.
 
 Use `--report-json PATH` for machine-readable scan/plan/phase details, or `--report-html PATH` for a compact human-readable summary with per-group recoverability indicators.
+
+### Runtime profiles
+
+`--profile` controls default parallelism without forcing manual tuning of all job/thread flags:
+
+- `safe`: minimal concurrency (`jobs=1`, `phase2_jobs=1`) for fragile disks/NAS.
+- `balanced`: conservative defaults for typical systems.
+- `fast`: higher concurrency for faster local SSD and multi-core systems.
+
+You can still override `--jobs`, `--phase2-jobs`, and `--phase2-brute-threads` explicitly.
 
 ### Verifying results
 
@@ -309,6 +326,29 @@ Yes. Visit [No More Ransom](https://www.nomoreransom.org/) and use their "Crypto
 - `--report-html` writes a human-readable recovery report with scan, plan, and per-group recoverability details.
 - `--manifest-json` exports manifest rows and status totals for downstream tooling.
 - Output basename collisions are resolved with stable source-hash suffixes instead of silently skipping unrelated files.
+
+### Performance notes (Sprint 10)
+- Added runtime profiles (`safe`, `balanced`, `fast`) to both `lockbit-rescue.py` and `lockbit-extend.py`.
+- Scan reporting now includes explicit counters for files skipped by min-size, max-size, and extension filtering.
+
+Benchmark helper (synthetic dataset):
+
+```bash
+python3 scripts/benchmark_scan.py /tmp/lockbit-bench --regenerate --groups 100 --files-per-group 50
+```
+
+This generates fake encrypted files with LockBit-like footer shape and reports scan throughput (`files_per_second`).
+
+### CI and quality notes (Sprint 11)
+- CI now runs `ruff`, `actionlint`, and `shellcheck` before tests.
+- Added local developer requirements in `requirements-dev.txt`.
+- Added `pyproject.toml` configuration for consistent lint behavior.
+
+### Security and governance notes (Sprint 12)
+- Added `SECURITY.md` with private vulnerability reporting guidance.
+- Added GitHub issue templates for bug reports, recovery help, and feature requests.
+- Added `.github/dependabot.yml` for weekly update PRs on GitHub Actions and pip dependencies.
+- Automated release notes now include artifact inventory and `SHA256SUMS.txt` content.
 
 See [BRUTEFORCE.md](docs/BRUTEFORCE.md) for a complete worked example (including the false-positive trap with short magic strings and the chunking-parameter requirements).
 

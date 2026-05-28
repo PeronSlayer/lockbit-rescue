@@ -222,6 +222,55 @@ All notable changes in this fork are documented here, grouped by sprint mileston
 ### Tests
 - Added coverage for collision-safe paths, manifest JSON export, and HTML report generation.
 
+## 2026-05-28 - Sprints 10-11 (Performance and Quality Tooling)
+
+### Added
+- Runtime profile helper module:
+  - `runtime_profiles.py`
+  - Profiles: `safe`, `balanced`, `fast`.
+- Synthetic scan benchmark utilities:
+  - `scripts/benchmark_scan.py`
+  - `lockbit_rescue_bench.py`
+- Development quality config files:
+  - `pyproject.toml` (ruff config)
+  - `requirements-dev.txt` (pytest + ruff)
+
+### Changed
+- `lockbit-rescue.py`
+  - Added `--profile safe|balanced|fast` for profile-based concurrency defaults.
+  - `--jobs`, `--phase2-jobs`, `--phase2-brute-threads` now default via profile when omitted.
+  - Scan stats now include explicit counters for `skipped_too_small`, `skipped_too_big`, and `skipped_extension_filter`.
+- `lockbit-extend.py`
+  - Added `--profile safe|balanced|fast`.
+  - `--jobs` and `--brute-threads` now default via profile when omitted.
+- `.github/workflows/ci.yml`
+  - Added lint/validation job running `ruff`, `actionlint`, and `shellcheck`.
+  - Test job now depends on lint/validation.
+  - CI jobs now install `requirements-dev.txt` for consistent local/CI tooling.
+- `README.md`
+  - Documented runtime profiles and Sprint 11 CI quality tooling.
+
+### Tests
+- Added profile behavior tests in `tests/test_runtime_profiles.py`.
+
+## 2026-05-28 - Sprint 12 (Security and Governance)
+
+### Added
+- Security policy:
+  - `SECURITY.md`
+- Issue management templates:
+  - `.github/ISSUE_TEMPLATE/bug_report.yml`
+  - `.github/ISSUE_TEMPLATE/recovery_help.yml`
+  - `.github/ISSUE_TEMPLATE/feature_request.yml`
+  - `.github/ISSUE_TEMPLATE/config.yml`
+- Dependency update automation:
+  - `.github/dependabot.yml` (GitHub Actions + pip)
+
+### Changed
+- `.github/workflows/release-on-push.yml`
+  - Release notes are now generated automatically from built assets.
+  - Release body now includes explicit artifact list and full SHA256 checksums.
+
 ---
 
 Notes:

@@ -1,0 +1,45 @@
+name: Recovery help
+description: Ask for guidance on safe and legitimate recovery usage.
+title: "[Recovery Help]: "
+labels:
+  - question
+  - recovery-help
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template for recovery guidance requests.
+        Do not upload private data or sensitive keys.
+  - type: dropdown
+    id: scenario
+    attributes:
+      label: Scenario
+      options:
+        - Plan-only guidance
+        - Phase 1 recovery issue
+        - Phase 2 extension issue
+        - Manifest/report interpretation
+        - Wizard usage
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment details
+      description: OS, Python version, and release tag.
+    validations:
+      required: true
+  - type: textarea
+    id: goal
+    attributes:
+      label: Recovery goal
+      description: Describe what result you are trying to achieve.
+    validations:
+      required: true
+  - type: textarea
+    id: attempts
+    attributes:
+      label: What you already tried
+    validations:
+      required: true

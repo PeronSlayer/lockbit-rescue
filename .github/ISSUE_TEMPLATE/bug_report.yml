@@ -1,0 +1,57 @@
+name: Bug report
+description: Report a functional issue in recovery, scan, or reporting behavior.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please provide enough detail to reproduce the issue.
+  - type: input
+    id: version
+    attributes:
+      label: Release version or commit
+      description: Tag name (for example release-YYYY.MM.DD-N) or commit SHA.
+      placeholder: release-2026.05.28-123
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Linux
+        - Windows
+        - WSL
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command used
+      description: Paste the exact command line and options.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or traceback
+      description: Remove private/sensitive paths before posting.
+      render: text
+    validations:
+      required: false

@@ -104,6 +104,7 @@ jobs:
           Copy-Item "phase2.py" "$pkgDir/phase2.py"
           Copy-Item "output_layout.py" "$pkgDir/output_layout.py"
           Copy-Item "report_utils.py" "$pkgDir/report_utils.py"
+          Copy-Item "runtime_profiles.py" "$pkgDir/runtime_profiles.py"
           Copy-Item "README.md" "$pkgDir/README.md"
           Copy-Item "README-WINDOWS.txt" "$pkgDir/README-WINDOWS.txt"
           Copy-Item "LICENSE" "$pkgDir/LICENSE"
@@ -191,6 +192,36 @@ jobs:
             echo "${checksum}  ${match}" | sha256sum -c -
           done < SHA256SUMS.txt
 
+      - name: Build release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s globstar nullglob
+
+          notes_file="release-assets/RELEASE_NOTES.md"
+          tag="${{ needs.prepare-version.outputs.tag }}"
+
+          {
+            echo "Full automated release from commit \`${{ github.sha }}\`."
+            echo
+            echo "- Workflow: \`${{ github.workflow }}\`"
+            echo "- Run number: \`${{ github.run_number }}\`"
+            echo "- Trigger: push to \`main\`"
+            echo
+            echo "## Artifacts"
+            for asset in release-assets/**/*.tar.gz release-assets/**/*.zip release-assets/**/*.exe; do
+              echo "- $(basename "${asset}")"
+            done
+            echo
+            echo "## Checksums"
+            echo
+            echo "\`\`\`text"
+            cat release-assets/SHA256SUMS.txt
+            echo "\`\`\`"
+            echo
+            echo "Tag: \`${tag}\`"
+          } > "${notes_file}"
+
       - name: Remove existing automated release for tag
         env:
           GH_TOKEN: ${{ github.token }}
@@ -207,13 +238,7 @@ jobs:
         with:
           tag_name: ${{ needs.prepare-version.outputs.tag }}
           name: ${{ needs.prepare-version.outputs.title }}
-          body: |
-            Full automated release from commit `${{ github.sha }}`.
-
-            - Workflow: `${{ github.workflow }}`
-            - Run number: `${{ github.run_number }}`
-            - Trigger: push to `main`
-            - Checksums: `SHA256SUMS.txt`
+          body_path: release-assets/RELEASE_NOTES.md
           prerelease: false
           make_latest: true
           fail_on_unmatched_files: true
