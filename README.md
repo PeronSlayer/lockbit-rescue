@@ -120,12 +120,18 @@ The repository includes a release pipeline that runs on every push to `main`:
 
 - Workflow: `.github/workflows/release-on-push.yml`
 - Behavior: build Linux bundle + build Windows wizard executable + publish a full GitHub release
-- Release assets: Linux `.tar.gz`, Windows `.zip`, and standalone `lockbit-wizard.exe`
+- Release assets: Linux `.tar.gz`, Windows `.zip`, standalone `lockbit-wizard.exe`, and `SHA256SUMS.txt`
 - Tag format: `release-<YYYY.MM.DD>-<run_number>`
 - Release title format: `LockBit Rescue <YYYY.MM.DD> build <run_number>`
-- Guardrails: release job fails if one of `.tar.gz`/`.zip`/`.exe` is missing
+- Guardrails: release job fails if one of `.tar.gz`/`.zip`/`.exe` is missing or checksum validation fails
 - Re-run behavior: if a release with the same generated tag already exists, it is replaced
 - Cleanup: removes legacy `auto-*` releases and keeps only the latest 10 generated `release-*` releases
+
+Verify downloaded release assets with:
+
+```bash
+sha256sum -c SHA256SUMS.txt
+```
 
 Manual local bundle build:
 
@@ -142,6 +148,7 @@ For simpler usage on Windows CMD, use the guided wizard:
 - Script: `lockbit-wizard.py`
 - CMD launcher: `lockbit-wizard.cmd`
 - Windows executable (from release pipeline): `lockbit-wizard.exe`
+- Windows release guide: `README-WINDOWS.txt`
 
 Wizard flow:
 

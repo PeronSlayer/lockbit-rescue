@@ -1,7 +1,6 @@
 name: Release On Push
 
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   KEEP_AUTOMATED_RELEASES: 10
 
 on:
@@ -106,10 +105,11 @@ jobs:
           Copy-Item "output_layout.py" "$pkgDir/output_layout.py"
           Copy-Item "report_utils.py" "$pkgDir/report_utils.py"
           Copy-Item "README.md" "$pkgDir/README.md"
+          Copy-Item "README-WINDOWS.txt" "$pkgDir/README-WINDOWS.txt"
           Copy-Item "LICENSE" "$pkgDir/LICENSE"
           Copy-Item "CHANGELOG.md" "$pkgDir/CHANGELOG.md"
           Copy-Item "requirements.txt" "$pkgDir/requirements.txt"
-          Compress-Archive -Path "$pkgDir/*" -DestinationPath "dist/lockbit-rescue-windows-$version.zip" -Force
+          Compress-Archive -Path $pkgDir -DestinationPath "dist/lockbit-rescue-windows-$version.zip" -Force
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -160,6 +160,37 @@ jobs:
             exit 1
           fi
 
+      - name: Generate release checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s globstar nullglob
+
+          checksum_file="release-assets/SHA256SUMS.txt"
+          : > "${checksum_file}"
+
+          assets=(release-assets/**/*.tar.gz release-assets/**/*.zip release-assets/**/*.exe)
+          for asset in "${assets[@]}"; do
+            sha256sum "${asset}" | sed 's#release-assets/[^/]*/##' >> "${checksum_file}"
+          done
+
+          sort -k2 "${checksum_file}" -o "${checksum_file}"
+          cat "${checksum_file}"
+
+      - name: Validate release checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-assets
+          while read -r checksum filename; do
+            match="$(find . -type f -name "${filename}" -print -quit)"
+            if [[ -z "${match}" ]]; then
+              echo "[ERROR] Checksum target not found: ${filename}"
+              exit 1
+            fi
+            echo "${checksum}  ${match}" | sha256sum -c -
+          done < SHA256SUMS.txt
+
       - name: Remove existing automated release for tag
         env:
           GH_TOKEN: ${{ github.token }}
@@ -182,6 +213,7 @@ jobs:
             - Workflow: `${{ github.workflow }}`
             - Run number: `${{ github.run_number }}`
             - Trigger: push to `main`
+            - Checksums: `SHA256SUMS.txt`
           prerelease: false
           make_latest: true
           fail_on_unmatched_files: true
@@ -189,6 +221,7 @@ jobs:
             release-assets/**/*.tar.gz
             release-assets/**/*.zip
             release-assets/**/*.exe
+            release-assets/SHA256SUMS.txt
 
       - name: Force full release status
         env:
@@ -203,7 +236,7 @@ jobs:
             -f name="${{ needs.prepare-version.outputs.title }}" \
             -F prerelease=false \
             -F draft=false \
-            -F make_latest=true
+            -f make_latest=true
 
       - name: Cleanup legacy auto releases
         env:

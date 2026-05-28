@@ -167,6 +167,29 @@ All notable changes in this fork are documented here, grouped by sprint mileston
 - `README.md`
   - Documented CMD wizard usage and Windows release artifact behavior.
 
+## 2026-05-28 - Sprint 7 Follow-up (Release Integrity Hardening)
+
+### Added
+- Windows release guide:
+  - `README-WINDOWS.txt`
+- Release checksum generation:
+  - `SHA256SUMS.txt` is generated for GitHub release assets.
+  - Local bundle builds now emit `dist/SHA256SUMS.txt`.
+
+### Changed
+- `.github/workflows/release-on-push.yml`
+  - Validates Linux tarball, Windows ZIP, standalone EXE, and checksums before publishing.
+  - Publishes `SHA256SUMS.txt` alongside release artifacts.
+  - Packages the Windows ZIP with a clear root folder instead of loose files.
+  - Uses clean release tags and titles instead of legacy `auto-*` naming.
+  - Forces generated releases to full release status and marks them as latest.
+  - Removes legacy `auto-*` releases and retains only the latest generated `release-*` releases.
+- `scripts/build_release_bundle.sh`
+  - Includes `README-WINDOWS.txt` in Linux/local bundles.
+  - Emits `SHA256SUMS.txt` for manual tarball builds.
+- `README.md`
+  - Documents release checksums, verification command, and Windows release guide.
+
 ---
 
 Notes:

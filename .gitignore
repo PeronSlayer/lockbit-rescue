@@ -16,6 +16,9 @@ _stream-reuse/
 usb_work/
 dist/
 
+# Local planning notes
+ROADMAP.md
+
 # Python caching
 __pycache__/
 *.pyc

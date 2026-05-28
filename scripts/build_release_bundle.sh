@@ -12,6 +12,7 @@ fi
 DIST_DIR="${ROOT_DIR}/dist"
 BUNDLE_DIR="${DIST_DIR}/lockbit-rescue-${VERSION}"
 TARBALL="${DIST_DIR}/lockbit-rescue-${VERSION}.tar.gz"
+CHECKSUMS="${DIST_DIR}/SHA256SUMS.txt"
 
 rm -rf "${BUNDLE_DIR}"
 mkdir -p "${BUNDLE_DIR}" "${DIST_DIR}"
@@ -32,7 +33,7 @@ python3 -m py_compile \
   report_utils.py
 
 # Package distribution files.
-cp -f LICENSE README.md CHANGELOG.md requirements.txt install.sh "${BUNDLE_DIR}/"
+cp -f LICENSE README.md README-WINDOWS.txt CHANGELOG.md requirements.txt install.sh "${BUNDLE_DIR}/"
 cp -f lockbit-rescue.py lockbit-extend.py verify-recovered.py "${BUNDLE_DIR}/"
 cp -f lockbit-wizard.py lockbit-wizard.cmd "${BUNDLE_DIR}/"
 cp -f manifest.py keystream_cache.py phase2.py output_layout.py report_utils.py "${BUNDLE_DIR}/"
@@ -42,7 +43,13 @@ cp -rf docs src "${BUNDLE_DIR}/"
 rm -f "${TARBALL}"
 tar -czf "${TARBALL}" -C "${DIST_DIR}" "lockbit-rescue-${VERSION}"
 
+(
+  cd "${DIST_DIR}"
+  sha256sum "$(basename "${TARBALL}")" > "$(basename "${CHECKSUMS}")"
+)
+
 # Emit machine-friendly paths for CI steps.
 echo "VERSION=${VERSION}"
 echo "BUNDLE_DIR=${BUNDLE_DIR}"
 echo "TARBALL=${TARBALL}"
+echo "CHECKSUMS=${CHECKSUMS}"
