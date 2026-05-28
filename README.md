@@ -114,6 +114,22 @@ Suggested lightweight release flow:
 3. Merge via squash commit.
 4. Tag release (`vX.Y.Z`) and publish release notes from `CHANGELOG.md`.
 
+## Automated build and release
+
+The repository includes a release pipeline that runs on every push to `main`:
+
+- Workflow: `.github/workflows/release-on-push.yml`
+- Behavior: build binaries + package tarball + publish GitHub prerelease
+- Tag format: `auto-<run_number>-<full_sha>`
+
+Manual local bundle build:
+
+```bash
+bash scripts/build_release_bundle.sh
+```
+
+This generates `dist/lockbit-rescue-<version>.tar.gz` with scripts, docs, and compiled helper binaries.
+
 ---
 
 ## Usage

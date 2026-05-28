@@ -136,6 +136,16 @@ All notable changes in this fork are documented here, grouped by sprint mileston
   - Added branch protection recommendations for `main`.
   - Added lightweight release flow guidance (PR -> CI -> squash -> tag -> release notes).
 
+### Added
+- Automated release workflow on push:
+  - `.github/workflows/release-on-push.yml`
+  - Builds binaries, packages tarball, and publishes prerelease on each push to `main`.
+- Reproducible local bundle build script:
+  - `scripts/build_release_bundle.sh`
+  - Produces `dist/lockbit-rescue-<version>.tar.gz`.
+- `.gitignore`
+  - Added `dist/` for local release artifacts.
+
 ---
 
 Notes:

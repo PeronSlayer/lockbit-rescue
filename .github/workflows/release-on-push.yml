@@ -1,0 +1,61 @@
+name: Release On Push
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential gcc-multilib libc6-dev-i386 file git
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Build release bundle
+        id: bundle
+        run: |
+          VERSION="auto-${{ github.run_number }}-${GITHUB_SHA::7}"
+          OUT=$(bash scripts/build_release_bundle.sh "${VERSION}")
+          echo "$OUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tarball=dist/lockbit-rescue-${VERSION}.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lockbit-rescue-${{ steps.bundle.outputs.version }}
+          path: ${{ steps.bundle.outputs.tarball }}
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: auto-${{ github.run_number }}-${{ github.sha }}
+          name: Automated Release ${{ steps.bundle.outputs.version }}
+          body: |
+            Automated build+release from commit `${{ github.sha }}`.
+
+            - Workflow: `${{ github.workflow }}`
+            - Run number: `${{ github.run_number }}`
+            - Trigger: push to `main`
+          prerelease: true
+          files: |
+            ${{ steps.bundle.outputs.tarball }}
